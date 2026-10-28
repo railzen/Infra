@@ -126,6 +126,8 @@ body.maximized .resize-top { display: none; }
 .btn.danger.confirm { background: var(--danger); color: #fff; border-color: transparent; }
 .btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
 .btn:disabled { opacity: .5; }
+.btn:focus { outline: none; }
+.btn:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 14%, transparent); }
 .tool { width: 28px; height: 28px; border-radius: var(--radius-md); display: grid; place-items: center; color: var(--tertiary); }
 .tool:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .tool.danger:hover { color: var(--danger); }
@@ -214,6 +216,18 @@ select.input option { background: var(--elevated); color: var(--fg); }
 /* ---------- dropdown (popup window) ---------- */
 body.menu { background: var(--elevated); overflow-y: auto; }
 body.menu .toast { bottom: 12px; font-size: 12px; padding: 6px 12px; }
+.ctx {
+  position: fixed; z-index: 50; min-width: 156px; padding: 4px;
+  background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow);
+}
+.ctx-item { width: 100%; height: 30px; padding: 0 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px; font-size: 13px; text-align: left; }
+.ctx-item:hover { background: var(--hover); }
+.ctx-item.danger { color: var(--danger); }
+.ctx-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.cf { padding: 10px 10px 8px; }
+.cf-title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+.cf-text { font-size: 12.5px; color: var(--secondary); line-height: 1.6; margin: 0 0 14px; word-break: break-all; }
+.cf-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .pp-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 8px; font-size: 13px; }
 .pp-row .grow { flex: 1; min-width: 0; }
 .pp-sec { display: flex; align-items: center; gap: 8px; padding-right: 4px; }
@@ -608,10 +622,33 @@ const BIND = {
 let kbIndex = -1;
 let menuHTML = "";        // last rendered dropdown markup
 let menuKindShown = "";
+let ctxMenu = null;       // right-click menu on a link: { id, x, y }
+let delConfirm = null;    // id of the link awaiting delete confirmation
+
+function ctxMenuHTML() {
+  if (!ctxMenu) return "";
+  return `
+    <div class="ctx" id="ctx" style="left:${ctxMenu.x}px;top:${ctxMenu.y}px" role="menu">
+      <button class="ctx-item" data-act="here" role="menuitem">在当前窗口打开</button>
+      <button class="ctx-item" data-act="new" role="menuitem">在新窗口打开</button>
+      <div class="ctx-sep"></div>
+      <button class="ctx-item danger" data-act="delete" role="menuitem">${I.trash}<span>删除</span></button>
+    </div>`;
+}
 
 const PANELS = {
   links() {
     const bs = S.bookmarks, cur = S.current?.id;
+    const del = delConfirm && bs.find((b) => b.id === delConfirm);
+    if (del) return `
+      <div class="cf">
+        <div class="cf-title">删除链接</div>
+        <p class="cf-text">确定删除「${esc(del.name)}」吗？它的 DNS 记录和记住的窗口位置会一起删除，此操作无法撤销。</p>
+        <div class="cf-actions">
+          <button class="btn sm" id="cf-cancel">取消</button>
+          <button class="btn sm danger confirm" id="cf-ok">删除</button>
+        </div>
+      </div>`;
     return `
       ${bs.length ? `<div class="dd-label">收藏夹</div>` + bs.map((b, i) => `
         <div class="dd-item${i === kbIndex ? " kb" : ""}" data-open="${esc(b.id)}" data-i="${i}" role="menuitem">
@@ -676,13 +713,39 @@ const PANELS = {
 
 const PANEL_BIND = {
   links() {
-    document.querySelectorAll("[data-open]").forEach((el) => (el.onclick = (e) => {
-      const ed = e.target.closest("[data-edit]");
-      if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
-      else send({ t: "open", id: el.dataset.open });
-    }));
+    if ($("#cf-ok")) {
+      $("#cf-cancel").onclick = () => { delConfirm = null; renderMenu(); };
+      $("#cf-ok").onclick = () => { const id = delConfirm; delConfirm = null; send({ t: "deleteLink", id }); };
+      $("#cf-cancel").focus();
+      return;
+    }
+    document.querySelectorAll("[data-open]").forEach((el) => {
+      el.onclick = (e) => {
+        const ed = e.target.closest("[data-edit]");
+        if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
+        else send({ t: "open", id: el.dataset.open });
+      };
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        ctxMenu = { id: el.dataset.open, x: e.clientX, y: e.clientY };
+        renderMenu();
+      };
+    });
     $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
     $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
+    const ctx = $("#ctx");
+    if (ctx) {
+      // keep the menu inside the dropdown window
+      const r = ctx.getBoundingClientRect();
+      ctx.style.left = Math.max(4, Math.min(ctxMenu.x, innerWidth - r.width - 4)) + "px";
+      ctx.style.top = Math.max(4, Math.min(ctxMenu.y, innerHeight - r.height - 4)) + "px";
+      ctx.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => {
+        const id = ctxMenu.id, act = b.dataset.act;
+        ctxMenu = null;
+        if (act === "delete") { delConfirm = id; renderMenu(); }
+        else send({ t: "open", id, where: act === "here" ? "current" : "new" });
+      }));
+    }
   },
   settings() {
     $("#s-default").onchange = (e) => send({ t: "settings", defaultPage: e.target.value, rememberWindow: !!S.settings.rememberWindow });
@@ -710,8 +773,8 @@ const PANEL_BIND = {
 function renderMenu() {
   document.body.classList.add("menu");
   const kind = PANELS[S.menuKind] ? S.menuKind : "links";
-  if (kind !== menuKindShown) { confirmDel = null; menuKindShown = kind; }
-  const html = `<div class="dd dd-${kind}" id="dd">${PANELS[kind]()}</div>`;
+  if (kind !== menuKindShown) { confirmDel = null; ctxMenu = null; delConfirm = null; menuKindShown = kind; }
+  const html = `<div class="dd dd-${kind}" id="dd">${PANELS[kind]()}</div>` + (kind === "links" && !delConfirm ? ctxMenuHTML() : "");
   // re-rendering would close an open <select>; skip pushes that change nothing
   if (html === menuHTML) return;
   menuHTML = html;
@@ -730,9 +793,15 @@ function setupMenu() {
   // the window width changes per dropdown; text may rewrap, so re-measure
   let lastW = 0;
   window.addEventListener("resize", () => { if (innerWidth !== lastW) { lastW = innerWidth; sendMenuSize(); } });
+  // a click anywhere outside the right-click menu dismisses it
+  document.addEventListener("mousedown", (e) => {
+    if (ctxMenu && !e.target.closest("#ctx")) { ctxMenu = null; renderMenu(); }
+  }, true);
   document.addEventListener("keydown", (e) => {
-    const n = S.menuKind === "links" ? S.bookmarks.length : 0;
-    if (e.key === "Escape") send({ t: "menuClose" });
+    const n = S.menuKind === "links" && !delConfirm ? S.bookmarks.length : 0;
+    if (e.key === "Escape" && ctxMenu) { ctxMenu = null; renderMenu(); }
+    else if (e.key === "Escape" && delConfirm) { delConfirm = null; renderMenu(); }
+    else if (e.key === "Escape") send({ t: "menuClose" });
     else if (e.key === "ArrowDown" && n) { kbIndex = (kbIndex + 1) % n; renderMenu(); }
     else if (e.key === "ArrowUp" && n) { kbIndex = (kbIndex - 1 + n) % n; renderMenu(); }
     else if (e.key === "Enter" && kbIndex >= 0 && kbIndex < n) send({ t: "open", id: S.bookmarks[kbIndex].id });
@@ -741,7 +810,11 @@ function setupMenu() {
   });
 }
 
-function render() { MODE === "menu" ? (kbIndex = S.menuOpen ? kbIndex : -1, renderMenu()) : renderMain(); }
+function render() {
+  if (MODE !== "menu") { renderMain(); return; }
+  if (!S.menuOpen) { kbIndex = -1; ctxMenu = null; delConfirm = null; }
+  renderMenu();
+}
 
 if (MODE === "menu") setupMenu(); else setupMain();
 send({ t: "ready" });

@@ -22,6 +22,7 @@ type inMsg struct {
 	T              string           `json:"t"`
 	X, Y, H        float64
 	Edge           string           `json:"edge"`
+	Where          string           `json:"where"`
 	Kind           string           `json:"kind"`
 	Page           string           `json:"page"`
 	Arg            string           `json:"arg"`
@@ -90,7 +91,20 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		w.showPage(m.Page, m.Arg)
 	case "open":
 		w.menu.hide()
-		a.open(w, m.ID)
+		switch m.Where {
+		case "current":
+			a.openHere(w, m.ID)
+		case "new":
+			a.openNew(w, m.ID)
+		default:
+			a.open(w, m.ID)
+		}
+	case "deleteLink":
+		// from the dropdown: it stays open, so the main window keeps its page
+		if a.removeBookmark(m.ID) {
+			w.toast("已删除", "ok")
+		}
+		a.pushAll()
 	case "nav":
 		if w.cur == nil || w.siteWV == 0 {
 			return
@@ -332,7 +346,20 @@ func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
 	a.pushAll()
 }
 
+// deleteBookmark is the delete button of the link editor.
 func (a *App) deleteBookmark(w *Window, id string) {
+	if a.removeBookmark(id) {
+		w.toast("已删除", "ok")
+	}
+	w.showPage("bookmarks", "")
+	a.pushAll()
+}
+
+// removeBookmark deletes a link and sends windows showing it back to the home page.
+func (a *App) removeBookmark(id string) bool {
+	if a.cfg.Bookmark(id) == nil {
+		return false
+	}
 	out := a.cfg.Bookmarks[:0]
 	for _, b := range a.cfg.Bookmarks {
 		if b.ID != id {
@@ -349,16 +376,12 @@ func (a *App) deleteBookmark(w *Window, id string) {
 	for _, x := range a.windows {
 		if x.cur != nil && x.cur.ID == id {
 			x.closeSite()
-			if x != w {
-				x.showPage("home", "")
-			}
+			x.showPage("home", "")
 		}
 	}
 	a.applyRecords()
 	a.save()
-	w.toast("已删除", "ok")
-	w.showPage("bookmarks", "")
-	a.pushAll()
+	return true
 }
 
 func (a *App) moveBookmark(id string, dir int) {

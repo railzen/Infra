@@ -270,11 +270,32 @@ func (a *App) open(from *Window, id string) {
 		}
 	}
 	if from.cur == nil {
-		// the home page window becomes this link's window: keep the home
-		// placement, then take on the link's own size and position
-		from.rememberPlacement()
-		from.applyPlacement(b.Window)
-		from.openBookmark(id)
+		a.openHere(from, id)
+		return
+	}
+	a.openNew(from, id)
+}
+
+// openHere loads a bookmark in window w, replacing whatever it shows. The
+// window first saves its placement for the page it leaves, then takes on the
+// link's own size and position.
+func (a *App) openHere(w *Window, id string) {
+	b := a.cfg.Bookmark(id)
+	if b == nil {
+		return
+	}
+	if w.cur != nil && w.cur.ID == id {
+		w.showPage("", "")
+		return
+	}
+	w.rememberPlacement()
+	w.applyPlacement(b.Window)
+	w.openBookmark(id)
+}
+
+// openNew opens a bookmark in a new window cascaded from `from`.
+func (a *App) openNew(from *Window, id string) {
+	if a.cfg.Bookmark(id) == nil {
 		return
 	}
 	// creating webviews pumps messages; do it outside the current webview callback

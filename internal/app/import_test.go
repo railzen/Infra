@@ -91,3 +91,18 @@ func TestOpenFileNameLayout(t *testing.T) {
 		t.Fatalf("OPENFILENAMEW size = %d, want 152", got)
 	}
 }
+
+func TestRemoveBookmark(t *testing.T) {
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	a := &App{store: store, cfg: config.Default()}
+	a.saver = newSaver(store, func(err error) { t.Error(err) })
+	defer netx.SetRecords(nil)
+	a.cfg.Bookmarks = []config.Bookmark{{ID: "a", Name: "A", URL: "https://a"}, {ID: "b", Name: "B", URL: "https://b"}}
+	a.cfg.DefaultPage, a.cfg.LastBookmark = "a", "a"
+	if !a.removeBookmark("a") || a.removeBookmark("missing") {
+		t.Fatal("removeBookmark result")
+	}
+	if len(a.cfg.Bookmarks) != 1 || a.cfg.Bookmarks[0].ID != "b" || a.cfg.DefaultPage != "home" || a.cfg.LastBookmark != "" {
+		t.Fatalf("after remove: %+v", a.cfg)
+	}
+}
