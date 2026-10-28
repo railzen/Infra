@@ -54,7 +54,7 @@ jobs:
             go.sum
             tools/genicon/go.sum
 
-      - name: Build and test
+      - name: Build, test and obfuscate
         shell: pwsh
         run: ./build.ps1 -Version '${{ steps.version.outputs.number }}'
 
