@@ -4,13 +4,12 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
-
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/wailsapp/go-webview2/pkg/edge"
 	"github.com/wailsapp/go-webview2/webviewloader"
@@ -18,7 +17,6 @@ import (
 
 	"intra/internal/config"
 	"intra/internal/netx"
-	"intra/ui"
 )
 
 const (
@@ -36,6 +34,7 @@ type siteState struct {
 	Loading bool   `json:"loading"`
 }
 
+// App holds what all windows share: configuration, the proxy and saving.
 type App struct {
 	version    string
 	exe        string
@@ -47,18 +46,8 @@ type App struct {
 	dataDir    string
 	args       []string
 
-	hwnd    uintptr
-	ui      *edge.Chromium
-	site    *edge.Chromium
-	siteWV  webview
-	uiReady bool
-	menu    *popup
-
-	page, pageArg string
-	cur           *siteState
-	active        bool
-	dark          bool
-	closing       bool
+	msgHwnd uintptr // message-only window that runs posted functions
+	windows []*Window
 
 	qmu   sync.Mutex
 	queue []func()
@@ -66,9 +55,15 @@ type App struct {
 	saver *saver
 }
 
-// Run starts Intra and blocks until the main window is closed.
+var theApp *App // window procedures need a way back to the App
+
+// Run starts Intra and blocks until the last window is closed.
 func Run(version string) {
-	a := &App{version: version, active: true}
+	if runCleanupHelper(os.Args) {
+		return
+	}
+	a := &App{version: version}
+	theApp = a
 	// Per-monitor v2 DPI awareness (also declared in the manifest); without it
 	// Windows bitmap-stretches the whole window on high-DPI displays.
 	if pSetProcessDpiAwarenessCx.Find() == nil {
@@ -114,7 +109,11 @@ func Run(version string) {
 		log.Printf("load config: %v", err)
 	}
 	a.saver = newSaver(a.store, func(err error) {
-		a.post(func() { a.toast("保存配置失败："+err.Error(), "err") })
+		a.post(func() {
+			if w := a.foreground(); w != nil {
+				w.toast("保存配置失败："+err.Error(), "err")
+			}
+		})
 	})
 	a.applyTrust()
 	a.applyRecords()
@@ -137,15 +136,20 @@ func Run(version string) {
 		"--disable-quic",
 	}
 
-	a.dark = systemDarkMode()
-	if err := a.createWindow(); err != nil {
+	if err := a.createMessageWindow(); err != nil {
 		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
 		return
 	}
-	a.restorePlacement()
-	a.embed()
-	a.startPage()
-	a.menu = newPopup(a)
+	if err := a.registerWindowClass(); err != nil {
+		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
+		return
+	}
+	w, err := a.newWindow(nil)
+	if err != nil {
+		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
+		return
+	}
+	w.startPage()
 
 	var m msg
 	for {
@@ -156,6 +160,7 @@ func Run(version string) {
 		pTranslateMessage.Call(ptr(&m))
 		pDispatchMessageW.Call(ptr(&m))
 	}
+	a.spawnCleanup()
 }
 
 func (a *App) className() string { return "IntraWindow-" + a.key }
@@ -171,6 +176,53 @@ func activateExisting(class string) {
 	pSetForegroundWindow.Call(h)
 }
 
+// createMessageWindow makes the message-only window that post() targets, so
+// queued work keeps running no matter which top-level windows exist.
+func (a *App) createMessageWindow() error {
+	cls := a.className() + "-msg"
+	wc := wndClassEx{
+		WndProc:   windows.NewCallback(func(h, m, wp, lp uintptr) uintptr {
+			if m == wmAppCall {
+				a.runQueue()
+				return 0
+			}
+			r, _, _ := pDefWindowProcW.Call(h, m, wp, lp)
+			return r
+		}),
+		Instance:  hInstance(),
+		ClassName: u16(cls),
+	}
+	wc.Size = uint32(unsafe.Sizeof(wc))
+	if atom, _, err := pRegisterClassExW.Call(ptr(&wc)); atom == 0 {
+		return err
+	}
+	const hwndMessage = ^uintptr(2) // HWND_MESSAGE (-3)
+	h, _, err := pCreateWindowExW.Call(0, ptr(u16(cls)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, hInstance(), 0)
+	if h == 0 {
+		return err
+	}
+	a.msgHwnd = h
+	return nil
+}
+
+// post runs fn on the UI thread, outside of any webview callback.
+func (a *App) post(fn func()) {
+	a.qmu.Lock()
+	a.queue = append(a.queue, fn)
+	a.qmu.Unlock()
+	pPostMessageW.Call(a.msgHwnd, wmAppCall, 0, 0)
+}
+
+func (a *App) runQueue() {
+	a.qmu.Lock()
+	q := a.queue
+	a.queue = nil
+	a.qmu.Unlock()
+	for _, fn := range q {
+		fn()
+	}
+}
+
 func (a *App) newChromium() *edge.Chromium {
 	c := edge.NewChromium()
 	c.DataPath = filepath.Join(a.dataDir, "WebView2")
@@ -179,44 +231,8 @@ func (a *App) newChromium() *edge.Chromium {
 	return c
 }
 
-func (a *App) bgColor() (r, g, b uint8) {
-	if a.dark {
-		return 0x18, 0x18, 0x18
-	}
-	return 0xff, 0xff, 0xff
-}
-
-func (a *App) embed() {
-	// --- UI: title bar + pages ---
-	a.ui = a.newChromium()
-	a.ui.MessageCallback = func(m string, _ *edge.ICoreWebView2, _ *edge.ICoreWebView2WebMessageReceivedEventArgs) {
-		a.onMessage(false, m)
-	}
-	a.ui.Embed(a.hwnd)
-	r, g, b := a.bgColor()
-	a.ui.SetBackgroundColour(r, g, b, 255)
-	lockDownUI(a.ui)
-	a.ui.Init(`window.__INTRA_MODE="main"`)
-	a.layout()
-	a.ui.NavigateToString(ui.HTML)
-
-	// --- site ---
-	a.site = a.newChromium()
-	a.site.Embed(a.hwnd)
-	a.site.SetBackgroundColour(r, g, b, 255)
-	if s, err := a.site.GetSettings(); err == nil {
-		// Sites must not reach the bridge: go-webview2 terminates the process
-		// on non-string web messages, and the site has no business talking to Go.
-		s.PutIsWebMessageEnabled(false)
-		s.PutAreHostObjectsAllowed(false)
-		s.PutIsStatusBarEnabled(true)
-	}
-	a.site.Hide()
-	a.siteWV = webviewOf(a.site)
-	a.hookSite()
-	a.setRasterScale()
-	a.layout()
-}
+// bgColor is the white the UI is drawn on, used before a webview paints.
+func (a *App) bgColor() (r, g, b uint8) { return 0xff, 0xff, 0xff }
 
 func lockDownUI(c *edge.Chromium) {
 	s, err := c.GetSettings()
@@ -232,133 +248,81 @@ func lockDownUI(c *edge.Chromium) {
 	}
 }
 
-func (a *App) hookSite() {
-	wv := a.siteWV
-	if wv == 0 {
+// ---------------------------------------------------------------- windows
+
+// open shows a bookmark requested from window `from`: a window still on the
+// home page loads it in place; a window already showing a site gets a new
+// window; a bookmark already open somewhere brings that window forward.
+func (a *App) open(from *Window, id string) {
+	if a.cfg.Bookmark(id) == nil {
 		return
 	}
-	vt := wv.vt()
-	wv.on(vt.AddDocumentTitleChanged, func(_, _ uintptr) {
-		if a.cur != nil {
-			a.cur.Title = wv.Title()
-			a.updateWindowTitle()
-			a.push()
-		}
-	})
-	wv.on(vt.AddHistoryChanged, func(_, _ uintptr) {
-		if a.cur != nil {
-			a.cur.CanBack, a.cur.CanFwd = wv.CanGoBack(), wv.CanGoForward()
-			a.push()
-		}
-	})
-	wv.on(vt.AddSourceChanged, func(_, _ uintptr) {
-		if a.cur != nil {
-			a.cur.URL = wv.Source()
-		}
-	})
-	wv.on(vt.AddNavigationStarting, func(_, _ uintptr) {
-		if a.cur != nil && !a.cur.Loading {
-			a.cur.Loading = true
-			a.push()
-		}
-	})
-	a.site.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
-		if a.cur != nil {
-			a.cur.Loading = false
-			a.cur.CanBack, a.cur.CanFwd = wv.CanGoBack(), wv.CanGoForward()
-			a.push()
+	for _, w := range a.windows {
+		if w.cur != nil && w.cur.ID == id && !w.closing {
+			if w == from {
+				w.showPage("", "")
+			}
+			w.activate()
+			return
 		}
 	}
-	// keep window.open / target=_blank inside the app window
-	wv.on(vt.AddNewWindowRequested, func(_, args uintptr) {
-		uri := newWindowURI(args)
-		newWindowHandled(args)
-		low := strings.ToLower(uri)
-		switch {
-		case strings.HasPrefix(low, "http://"), strings.HasPrefix(low, "https://"):
-			a.site.Navigate(uri)
-		case uri != "" && !strings.HasPrefix(low, "javascript:") && !strings.HasPrefix(low, "file:"):
-			shellOpen(uri)
-		}
-	})
-}
-
-// post runs fn on the UI thread.
-func (a *App) post(fn func()) {
-	a.qmu.Lock()
-	a.queue = append(a.queue, fn)
-	a.qmu.Unlock()
-	pPostMessageW.Call(a.hwnd, wmAppCall, 0, 0)
-}
-
-func (a *App) runQueue() {
-	a.qmu.Lock()
-	q := a.queue
-	a.queue = nil
-	a.qmu.Unlock()
-	for _, fn := range q {
-		fn()
-	}
-}
-
-// ---------------------------------------------------------------- state
-
-func (a *App) startPage() {
-	dp := a.cfg.DefaultPage
-	if dp == "last" {
-		dp = a.cfg.LastBookmark
-	}
-	if dp != "" && dp != "home" && a.cfg.Bookmark(dp) != nil {
-		a.openBookmark(dp)
+	if from.cur == nil {
+		from.openBookmark(id)
 		return
 	}
-	a.showPage("home", "")
+	// creating webviews pumps messages; do it outside the current webview callback
+	a.post(func() {
+		w, err := a.newWindow(from)
+		if err != nil {
+			from.toast("无法打开新窗口："+err.Error(), "err")
+			return
+		}
+		w.openBookmark(id)
+	})
 }
 
-func (a *App) showPage(page, arg string) {
-	if page == "" && a.cur == nil {
-		page = "home"
+func (a *App) closeWindow(w *Window) {
+	w.rememberPlacement()
+	w.closing = true
+	for i, x := range a.windows {
+		if x == w {
+			a.windows = append(a.windows[:i], a.windows[i+1:]...)
+			break
+		}
 	}
-	a.page, a.pageArg = page, arg
-	a.layout()
-	a.push()
-	if page == "" {
-		a.focusSite()
-	} else if a.ui != nil {
-		a.ui.Focus()
-	}
-}
-
-func (a *App) focusSite() {
-	if a.site != nil && a.cur != nil && a.page == "" {
-		a.site.Focus()
-	}
-}
-
-func (a *App) openBookmark(id string) {
-	b := a.cfg.Bookmark(id)
-	if b == nil {
-		return
-	}
-	a.cur = &siteState{ID: b.ID, Name: b.Name, URL: b.URL, Loading: true}
-	a.applyRecords()
-	a.page, a.pageArg = "", ""
-	a.layout()
-	a.site.Navigate(normalizeURL(b.URL))
-	a.cfg.LastBookmark = id
-	a.updateWindowTitle()
-	a.push()
-	a.focusSite()
-}
-
-func (a *App) closeSite() {
-	a.cur = nil
-	if a.site != nil {
-		a.site.Navigate("about:blank")
+	closeController(w.ui)
+	closeController(w.site)
+	if w.menu != nil {
+		closeController(w.menu.wv)
 	}
 	a.applyRecords()
-	a.updateWindowTitle()
+	if len(a.windows) == 0 {
+		a.saver.flush(a.cfg.Clone())
+	} else {
+		a.save()
+	}
 }
+
+// foreground returns the active window, or any window.
+func (a *App) foreground() *Window {
+	for _, w := range a.windows {
+		if w.active {
+			return w
+		}
+	}
+	if len(a.windows) > 0 {
+		return a.windows[0]
+	}
+	return nil
+}
+
+func (a *App) pushAll() {
+	for _, w := range a.windows {
+		w.push()
+	}
+}
+
+// ---------------------------------------------------------------- shared state
 
 func normalizeURL(u string) string {
 	u = strings.TrimSpace(u)
@@ -369,19 +333,7 @@ func normalizeURL(u string) string {
 	return u
 }
 
-func (a *App) updateWindowTitle() {
-	t := "Intra"
-	if a.cur != nil {
-		name := a.cur.Name
-		if a.cur.Title != "" {
-			name = a.cur.Title
-		}
-		t = name + " - Intra"
-	}
-	pSetWindowTextW.Call(a.hwnd, ptr(u16(t)))
-}
-
-// applyRecords installs DNS records with the open bookmark taking precedence.
+// applyRecords installs DNS records; bookmarks open in windows take precedence.
 func (a *App) applyRecords() {
 	var groups [][]netx.Record
 	conv := func(b *config.Bookmark) []netx.Record {
@@ -391,14 +343,18 @@ func (a *App) applyRecords() {
 		}
 		return out
 	}
-	if a.cur != nil {
-		if b := a.cfg.Bookmark(a.cur.ID); b != nil {
+	open := map[string]bool{}
+	for _, w := range a.windows {
+		if w.cur == nil || w.closing || open[w.cur.ID] {
+			continue
+		}
+		if b := a.cfg.Bookmark(w.cur.ID); b != nil {
+			open[b.ID] = true
 			groups = append(groups, conv(b))
 		}
 	}
 	for i := range a.cfg.Bookmarks {
-		b := &a.cfg.Bookmarks[i]
-		if a.cur == nil || b.ID != a.cur.ID {
+		if b := &a.cfg.Bookmarks[i]; !open[b.ID] {
 			groups = append(groups, conv(b))
 		}
 	}
@@ -436,6 +392,7 @@ type stateMsg struct {
 	Page      string     `json:"page"`
 	PageArg   string     `json:"pageArg"`
 	MenuOpen  bool       `json:"menuOpen"`
+	MenuKind  string     `json:"menuKind"`
 	Maximized bool       `json:"maximized"`
 	Active    bool       `json:"active"`
 	Info      struct {
@@ -447,9 +404,9 @@ type stateMsg struct {
 	} `json:"info"`
 }
 
-func (a *App) state() *stateMsg {
-	s := &stateMsg{T: "state", Bookmarks: a.cfg.Bookmarks, CAs: []caView{}, Current: a.cur,
-		Page: a.page, PageArg: a.pageArg, Active: a.active}
+// baseState fills the fields every window shares.
+func (a *App) baseState() *stateMsg {
+	s := &stateMsg{T: "state", Bookmarks: a.cfg.Bookmarks, CAs: []caView{}}
 	if s.Bookmarks == nil {
 		s.Bookmarks = []config.Bookmark{}
 	}
@@ -463,8 +420,6 @@ func (a *App) state() *stateMsg {
 	}
 	s.Settings.DefaultPage = a.cfg.DefaultPage
 	s.Settings.RememberWindow = a.cfg.RememberWindow
-	s.MenuOpen = a.menu != nil && a.menu.open
-	s.Maximized = a.hwnd != 0 && isZoomed(a.hwnd)
 	s.Info.Version = a.version
 	s.Info.RootCount = netx.BuiltinRootCount()
 	s.Info.BundleDate = netx.BundleDate()
@@ -473,31 +428,4 @@ func (a *App) state() *stateMsg {
 	return s
 }
 
-// push sends the full state to every ready front-end.
-func (a *App) push() {
-	if a.ui == nil || a.closing {
-		return
-	}
-	j, err := json.Marshal(a.state())
-	if err != nil {
-		return
-	}
-	script := "window.intra&&intra.recv(" + string(j) + ")"
-	if a.uiReady {
-		a.ui.Eval(script)
-	}
-	if a.menu != nil && a.menu.ready {
-		a.menu.wv.Eval(script)
-	}
-}
-
-func (a *App) toast(text, kind string) {
-	if !a.uiReady || a.closing {
-		return
-	}
-	j, _ := json.Marshal(map[string]string{"t": "toast", "text": text, "kind": kind})
-	a.ui.Eval("window.intra&&intra.recv(" + string(j) + ")")
-}
-
 func (a *App) save() { a.saver.save(a.cfg.Clone()) }
-

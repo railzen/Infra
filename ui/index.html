@@ -14,13 +14,13 @@
   --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 14px;
 
   --bg: #ffffff;
-  --surface-2: #f9f9f9;
+  --surface-2: #fafafa;
   --elevated: #ffffff;
   --fg: #1a1c1f;
   --secondary: #5d5d5d;
   --tertiary: #8f8f8f;
-  --border: #0000001a;
-  --border-strong: #00000026;
+  --border: #00000012;
+  --border-strong: #00000024;
   --hover: color-mix(in srgb, var(--fg) 5%, transparent);
   --selection: color-mix(in oklab, #000 8%, transparent);
   --symbol: #1f1f1f;
@@ -28,28 +28,8 @@
   --caption-press: color-mix(in srgb, var(--symbol) 20%, transparent);
   --danger: #e02e2a;
   --ok: #008635;
-  --accent: #2f6bff;
-  --shadow: 0 4px 8px -2px #0000001a, 0 12px 32px -8px #0000001f;
+  --shadow: 0 2px 6px -2px #00000014, 0 10px 28px -10px #0000001a;
   color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #181818;
-    --surface-2: #1c1c1c;
-    --elevated: #212121;
-    --fg: #dfdfdf;
-    --secondary: #cdcdcd;
-    --tertiary: #afafaf;
-    --border: #ffffff26;
-    --border-strong: #ffffff33;
-    --selection: color-mix(in oklab, #fff 12%, transparent);
-    --symbol: #ffffff;
-    --danger: #ff6764;
-    --ok: #40c977;
-    --accent: #6b97ff;
-    --shadow: 0 4px 8px -2px #00000066, 0 12px 32px -8px #00000080;
-    color-scheme: dark;
-  }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -182,14 +162,15 @@ select.input option { background: var(--elevated); color: var(--fg); }
 
 .avatar {
   width: 32px; height: 32px; border-radius: 9px; flex: none; display: grid; place-items: center;
-  font-size: 14px; font-weight: 600; color: #fff;
+  font-size: 14px; font-weight: 600; color: #3f3f46;
+  background: #f4f4f5; border: 1px solid var(--border);
 }
 .avatar.sm { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
 .avatar.lg { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
 
 /* home */
 .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
-.hero > svg { width: 44px; height: 44px; }
+.hero > svg { width: 36px; height: 36px; }
 .hero h1 { font-size: 22px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
 .hero p { margin: 0; color: var(--tertiary); font-size: 13px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
@@ -198,7 +179,7 @@ select.input option { background: var(--elevated); color: var(--fg); }
   padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 112px; position: relative;
   transition: border-color .12s, transform .12s;
 }
-.tile:hover { border-color: var(--border-strong); background: color-mix(in srgb, var(--elevated) 94%, var(--fg)); }
+.tile:hover { border-color: var(--border-strong); }
 .tile .name { font-size: 14px; font-weight: 500; }
 .tile .host { font-size: 12px; color: var(--tertiary); }
 .tile .edit { position: absolute; top: 10px; right: 10px; opacity: 0; }
@@ -212,7 +193,7 @@ select.input option { background: var(--elevated); color: var(--fg); }
 
 /* about */
 .about { text-align: center; padding-top: 40px; }
-.about .mark { width: 88px; height: 88px; margin: 0 auto 18px; filter: drop-shadow(0 10px 24px #2f6bff40); }
+.about .mark { width: 72px; height: 72px; margin: 0 auto 18px; }
 .about h1 { font-size: 26px; margin: 0; font-weight: 600; letter-spacing: -.02em; }
 .about .ver { color: var(--tertiary); font-size: 13px; margin: 4px 0 18px; }
 .about .lead { color: var(--secondary); max-width: 460px; margin: 0 auto 28px; font-size: 14px; }
@@ -231,7 +212,27 @@ select.input option { background: var(--elevated); color: var(--fg); }
 .toast.err { background: var(--danger); color: #fff; }
 
 /* ---------- dropdown (popup window) ---------- */
-body.menu { background: var(--elevated); }
+body.menu { background: var(--elevated); overflow-y: auto; }
+body.menu .toast { bottom: 12px; font-size: 12px; padding: 6px 12px; }
+.pp-row { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 8px; font-size: 13px; }
+.pp-row .grow { flex: 1; min-width: 0; }
+.pp-sec { display: flex; align-items: center; gap: 8px; padding-right: 4px; }
+.pp-sec .grow { flex: 1; }
+.pp-hint { font-size: 12px; color: var(--tertiary); padding: 0 8px 6px; line-height: 1.55; }
+.pp-ic { color: var(--tertiary); display: grid; place-items: center; }
+.pp-desc { font-size: 11.5px; color: var(--tertiary); }
+.pp-foot { font-size: 11.5px; color: var(--tertiary); padding: 4px 8px 6px; }
+select.input.sm { width: 172px; height: 28px; font-size: 12.5px; border-radius: 8px; padding-left: 10px; }
+.dd.dd-about { padding: 14px 16px 12px; }
+.pa-top { display: flex; align-items: center; gap: 12px; }
+.pa-top svg { width: 40px; height: 40px; }
+.pa-name { font-size: 15px; font-weight: 600; }
+.pa-ver { font-size: 12px; color: var(--tertiary); }
+.pa-lead { font-size: 12.5px; color: var(--secondary); line-height: 1.6; margin: 12px 0 10px; }
+.pa-kv { display: flex; gap: 10px; font-size: 12.5px; padding: 4px 0; }
+.pa-kv .k { width: 72px; flex: none; color: var(--tertiary); }
+.pa-kv .v { flex: 1; min-width: 0; }
+.dd.dd-about .dd-sep { margin: 4px 0 8px; }
 .dd { padding: 6px; }
 .dd-label { font-size: 12px; color: var(--tertiary); padding: 6px 8px 4px; }
 .dd-item {
@@ -262,7 +263,7 @@ const send = (m) => window.chrome.webview.postMessage(JSON.stringify(m));
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-const LOGO = `<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3D7BFF"/><stop offset="1" stop-color="#7B3FF2"/></linearGradient></defs><rect x="8" y="8" width="240" height="240" rx="60" fill="url(#lg)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M154.2 63.1A70 70 0 0 1 154.2 192.9M101.8 192.9A70 70 0 0 1 101.8 63.1" stroke-width="16" stroke-opacity=".92"/><path d="M128 52V204" stroke-width="20"/></g></svg>`;
+const LOGO = `<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"><circle cx="128" cy="128" r="120" fill="#111"/><path d="M52 136L90 80L126 133C134 146 146 174 166 174C186 174 204 158 204 134" fill="none" stroke="#fff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
 const I = {
   back: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>',
@@ -292,11 +293,9 @@ let confirmDel = null;
 function hostOf(u) {
   try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : "https://" + u).host; } catch { return u; }
 }
-function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; }
 function avatar(b, cls = "") {
   const ch = ([...(b.name || hostOf(b.url) || "?").trim()][0] || "?").toUpperCase();
-  const h = hue(b.name + b.url);
-  return `<div class="avatar ${cls}" style="background:linear-gradient(135deg,hsl(${h} 70% 56%),hsl(${(h + 40) % 360} 68% 46%))">${esc(ch)}</div>`;
+  return `<div class="avatar ${cls}">${esc(ch)}</div>`;
 }
 function toast(text, kind) {
   const t = $("#toast");
@@ -352,13 +351,13 @@ function setupMain() {
   $(".resize-top").addEventListener("mousedown", (e) => {
     if (e.button === 0) send({ t: "resize", edge: e.target.dataset.resize });
   });
-  $("#m-fav").addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    send({ t: "menu", x: r.left, y: r.bottom });
-  });
-  $("#m-set").onclick = () => show(S.page === "settings" ? "" : "settings");
-  $("#m-about").onclick = () => show(S.page === "about" ? "" : "about");
+  for (const [id, kind] of [["m-fav", "links"], ["m-set", "settings"], ["m-about", "about"]]) {
+    $("#" + id).addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      send({ t: "menu", kind, x: r.left, y: r.bottom });
+    });
+  }
   $("#n-back").onclick = () => send({ t: "nav", action: "back" });
   $("#n-fwd").onclick = () => send({ t: "nav", action: "forward" });
   $("#n-reload").onclick = () => send({ t: "nav", action: S.current?.loading ? "stop" : "reload" });
@@ -372,14 +371,15 @@ function setupMain() {
 
 function show(page, arg = "") { send({ t: "show", page, arg }); }
 
-const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹", edit: "编辑网站", settings: "设置", about: "关于 Intra" };
+const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹", edit: "编辑网站" };
 
 function renderBar() {
   document.body.classList.toggle("maximized", !!S.maximized);
   document.body.classList.toggle("inactive", S.active === false);
-  $("#m-fav").classList.toggle("sel", !!S.menuOpen || ["home", "bookmarks", "edit"].includes(S.page));
-  $("#m-set").classList.toggle("sel", S.page === "settings");
-  $("#m-about").classList.toggle("sel", S.page === "about");
+  const open = (k) => !!S.menuOpen && S.menuKind === k;
+  $("#m-fav").classList.toggle("sel", open("links") || (!S.menuOpen && ["home", "bookmarks", "edit"].includes(S.page)));
+  $("#m-set").classList.toggle("sel", open("settings"));
+  $("#m-about").classList.toggle("sel", open("about"));
   const c = S.current;
   // always shown; disabled while no site is open or a page covers it
   const onPage = !!S.page || !c;
@@ -506,61 +506,6 @@ const PAGES = {
       </div>`;
   },
 
-  settings() {
-    const st = S.settings, info = S.info;
-    const opts = [["home", "收藏夹主页"], ["last", "上次打开的网站"], ...S.bookmarks.map((b) => [b.id, b.name])];
-    return `
-      <div class="page-head">${backBtn()}<h1>设置</h1></div>
-      <div class="section"><h2>通用</h2><div class="card">
-        <div class="row"><div class="grow"><div class="label">启动时打开</div><div class="desc">打开 Intra 时显示的页面</div></div>
-          <select class="input" id="s-default" style="width:200px">
-            ${opts.map(([v, n]) => `<option value="${esc(v)}" ${st.defaultPage === v ? "selected" : ""}>${esc(n)}</option>`).join("")}
-          </select></div>
-        <div class="row"><div class="grow"><div class="label">记住窗口大小和位置</div><div class="desc">下次启动时恢复上次关闭时的窗口状态</div></div>
-          <button class="switch" role="switch" id="s-remember" aria-checked="${!!st.rememberWindow}"></button></div>
-      </div></div>
-
-      <div class="section"><h2>证书</h2>
-        <p class="hint">Intra 不信任 Windows 系统证书库。HTTPS 网站只有在证书链指向内置的 ${info.rootCount || 0} 个 Mozilla 公共根证书，或下方手动添加的 CA 时才会被打开。</p>
-        <div class="card">
-          ${S.cas.length ? S.cas.map((c) => `
-            <div class="row">
-              <div style="color:var(--tertiary)">${I.shield}</div>
-              <div class="grow"><div class="label trunc">${esc(c.name)}</div>
-                <div class="desc trunc mono" title="SHA-256 ${esc(c.fingerprint)}">${esc(c.fingerprint.slice(0, 47))}…</div>
-                <div class="desc">有效期至 ${esc(c.notAfter)} · 添加于 ${esc(c.addedAt)}</div></div>
-              <button class="btn sm danger ${confirmDel === c.id ? "confirm" : ""}" data-delca="${esc(c.id)}">${confirmDel === c.id ? "确认删除" : "删除"}</button>
-            </div>`).join("") : `<div class="empty-row">尚未添加自定义 CA</div>`}
-          <div class="row" style="min-height:52px">
-            <div class="grow desc" style="margin:0">支持 .pem / .crt / .cer / .der，一个文件中可包含多个证书</div>
-            <button class="btn sm" id="addca">${I.plus}添加 CA 证书</button>
-            <input type="file" id="cafile" accept=".pem,.crt,.cer,.der,.txt" multiple hidden>
-          </div>
-        </div></div>
-
-      <div class="section"><h2>配置存储</h2><div class="card kv">
-        <div class="row"><div class="k">保存位置</div><div class="v trunc mono" title="${esc(info.exePath)}">${esc(info.exePath)}</div></div>
-        <div class="row"><div class="k">说明</div><div class="v" style="color:var(--secondary)">所有设置都附加在 exe 文件末尾，复制 Intra.exe 即可连同收藏夹、证书一起带走。</div></div>
-      </div></div>`;
-  },
-
-  about() {
-    const info = S.info;
-    return `
-      <div class="page-head">${backBtn()}<h1></h1></div>
-      <div class="about">
-        <div class="mark">${LOGO}</div>
-        <h1>Intra</h1>
-        <div class="ver">版本 ${esc(info.version)}</div>
-        <p class="lead">把网站当作本机应用打开。为每个网站自定义名称、网址和 DNS 记录，并使用独立、可控的证书信任列表。</p>
-        <div class="card kv">
-          <div class="row"><div class="k">浏览器内核</div><div class="v">Microsoft Edge WebView2 ${esc(info.webview2)}</div></div>
-          <div class="row"><div class="k">证书信任</div><div class="v">Mozilla 公共根证书 ${info.rootCount} 个（${esc(info.bundleDate)}）+ 自定义 CA ${S.cas.length} 个</div></div>
-          <div class="row"><div class="k">系统证书库</div><div class="v">不使用</div></div>
-          <div class="row"><div class="k">配置文件</div><div class="v">内嵌于 exe 末尾</div></div>
-        </div>
-      </div>`;
-  },
 };
 
 function startDraft(id) {
@@ -657,35 +602,17 @@ const BIND = {
     };
     if (!draft.id) setTimeout(() => $("#f-name")?.focus(), 0);
   },
-  settings() {
-    bindCommon();
-    $("#s-default").onchange = (e) => send({ t: "settings", defaultPage: e.target.value, rememberWindow: !!S.settings.rememberWindow });
-    $("#s-remember").onclick = () => send({ t: "settings", defaultPage: S.settings.defaultPage, rememberWindow: !S.settings.rememberWindow });
-    $("#addca").onclick = () => $("#cafile").click();
-    $("#cafile").onchange = async (e) => {
-      for (const f of e.target.files) {
-        const buf = new Uint8Array(await f.arrayBuffer());
-        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-        send({ t: "addCA", name: f.name, data: btoa(bin) });
-      }
-      e.target.value = "";
-    };
-    document.querySelectorAll("[data-delca]").forEach((b) => (b.onclick = () => {
-      const id = b.dataset.delca;
-      if (confirmDel === id) { confirmDel = null; send({ t: "deleteCA", id }); }
-      else { confirmDel = id; renderMain(true); }
-    }));
-  },
-  about: bindCommon,
 };
 
 /* ======================= dropdown popup ======================= */
 let kbIndex = -1;
-function renderMenu() {
-  document.body.classList.add("menu");
-  const bs = S.bookmarks, cur = S.current?.id;
-  $("#root").innerHTML = `
-    <div class="dd" id="dd">
+let menuHTML = "";        // last rendered dropdown markup
+let menuKindShown = "";
+
+const PANELS = {
+  links() {
+    const bs = S.bookmarks, cur = S.current?.id;
+    return `
       ${bs.length ? `<div class="dd-label">收藏夹</div>` + bs.map((b, i) => `
         <div class="dd-item${i === kbIndex ? " kb" : ""}" data-open="${esc(b.id)}" data-i="${i}" role="menuitem">
           ${avatar(b, "sm")}
@@ -697,22 +624,114 @@ function renderMenu() {
       <div class="dd-foot">
         <button class="dd-item" id="dd-add">${I.plus}<span>添加网站</span></button>
         <button class="dd-item" id="dd-manage">${I.list}<span>管理收藏夹</span></button>
-      </div>
-    </div>`;
-  document.querySelectorAll("[data-open]").forEach((el) => (el.onclick = (e) => {
-    const ed = e.target.closest("[data-edit]");
-    if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
-    else send({ t: "open", id: el.dataset.open });
-  }));
-  $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
-  $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
-  send({ t: "menuSize", h: Math.ceil($("#dd").getBoundingClientRect().height) });
+      </div>`;
+  },
+
+  settings() {
+    const st = S.settings, info = S.info;
+    const opts = [["home", "收藏夹主页"], ["last", "上次打开的网站"], ...S.bookmarks.map((b) => [b.id, b.name])];
+    return `
+      <div class="dd-label">通用</div>
+      <div class="pp-row"><span class="grow">启动时打开</span>
+        <select class="input sm" id="s-default">
+          ${opts.map(([v, n]) => `<option value="${esc(v)}" ${st.defaultPage === v ? "selected" : ""}>${esc(n)}</option>`).join("")}
+        </select></div>
+      <div class="pp-row"><span class="grow">记住窗口大小和位置</span>
+        <button class="switch" role="switch" id="s-remember" aria-checked="${!!st.rememberWindow}"></button></div>
+      <div class="dd-sep"></div>
+      <div class="dd-label pp-sec"><span class="grow">证书</span>
+        <button class="btn sm" id="addca">${I.plus}添加 CA</button>
+        <input type="file" id="cafile" accept=".pem,.crt,.cer,.der,.txt" multiple hidden></div>
+      <div class="pp-hint">不使用 Windows 系统证书库，只信任内置的 ${info.rootCount || 0} 个 Mozilla 公共根证书和下列 CA。支持 .pem / .crt / .cer / .der。</div>
+      ${S.cas.length ? S.cas.map((c) => `
+        <div class="pp-row">
+          <span class="pp-ic">${I.shield}</span>
+          <div class="grow"><div class="trunc">${esc(c.name)}</div>
+            <div class="pp-desc trunc" title="SHA-256 ${esc(c.fingerprint)}">有效期至 ${esc(c.notAfter)} · ${esc(c.fingerprint.slice(0, 23))}…</div></div>
+          ${confirmDel === c.id
+            ? `<button class="btn sm danger confirm" data-delca="${esc(c.id)}">确认删除</button>`
+            : `<button class="tool danger" data-delca="${esc(c.id)}" title="删除">${I.trash}</button>`}
+        </div>`).join("") : `<div class="dd-empty">尚未添加自定义 CA</div>`}
+      <div class="dd-sep"></div>
+      <div class="dd-label pp-sec"><span class="grow">配置</span>
+        <button class="btn sm" id="cfg-import">导入</button>
+        <button class="btn sm" id="cfg-export">导出</button></div>
+      <div class="pp-hint">以 JSON 文件导入或导出链接、DNS 记录、CA 和设置。导入时与现有配置合并，同一链接会被更新。</div>
+      <div class="dd-sep"></div>
+      <div class="pp-foot trunc" title="${esc(info.exePath)}">配置保存在 exe 末尾 · ${esc(info.exePath)}</div>`;
+  },
+
+  about() {
+    const info = S.info;
+    return `
+      <div class="pa-top">${LOGO}<div><div class="pa-name">Intra</div><div class="pa-ver">版本 ${esc(info.version)}</div></div></div>
+      <p class="pa-lead">把网站当作本机应用打开。为每个网站自定义名称、网址和 DNS 记录，并使用独立、可控的证书信任列表。</p>
+      <div class="dd-sep"></div>
+      <div class="pa-kv"><span class="k">浏览器内核</span><span class="v">WebView2 ${esc(info.webview2)}</span></div>
+      <div class="pa-kv"><span class="k">证书信任</span><span class="v">Mozilla 公共根证书 ${info.rootCount} 个（${esc(info.bundleDate)}）+ 自定义 CA ${S.cas.length} 个</span></div>
+      <div class="pa-kv"><span class="k">系统证书库</span><span class="v">不使用</span></div>
+      <div class="pa-kv"><span class="k">配置文件</span><span class="v">内嵌于 exe 末尾</span></div>`;
+  },
+};
+
+const PANEL_BIND = {
+  links() {
+    document.querySelectorAll("[data-open]").forEach((el) => (el.onclick = (e) => {
+      const ed = e.target.closest("[data-edit]");
+      if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
+      else send({ t: "open", id: el.dataset.open });
+    }));
+    $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
+    $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
+  },
+  settings() {
+    $("#s-default").onchange = (e) => send({ t: "settings", defaultPage: e.target.value, rememberWindow: !!S.settings.rememberWindow });
+    $("#s-remember").onclick = () => send({ t: "settings", defaultPage: S.settings.defaultPage, rememberWindow: !S.settings.rememberWindow });
+    $("#addca").onclick = () => $("#cafile").click();
+    $("#cfg-import").onclick = () => send({ t: "importConfig" });
+    $("#cfg-export").onclick = () => send({ t: "exportConfig" });
+    $("#cafile").onchange = async (e) => {
+      for (const f of e.target.files) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        send({ t: "addCA", name: f.name, data: btoa(bin) });
+      }
+      e.target.value = "";
+    };
+    document.querySelectorAll("[data-delca]").forEach((b) => (b.onclick = () => {
+      const id = b.dataset.delca;
+      if (confirmDel === id) { confirmDel = null; send({ t: "deleteCA", id }); }
+      else { confirmDel = id; renderMenu(); }
+    }));
+  },
+  about() {},
+};
+
+function renderMenu() {
+  document.body.classList.add("menu");
+  const kind = PANELS[S.menuKind] ? S.menuKind : "links";
+  if (kind !== menuKindShown) { confirmDel = null; menuKindShown = kind; }
+  const html = `<div class="dd dd-${kind}" id="dd">${PANELS[kind]()}</div>`;
+  // re-rendering would close an open <select>; skip pushes that change nothing
+  if (html === menuHTML) return;
+  menuHTML = html;
+  $("#root").innerHTML = html;
+  PANEL_BIND[kind]();
+  sendMenuSize();
+}
+
+function sendMenuSize() {
+  const dd = $("#dd");
+  if (dd) send({ t: "menuSize", kind: menuKindShown, h: Math.ceil(dd.getBoundingClientRect().height) });
 }
 
 function setupMenu() {
   document.addEventListener("contextmenu", (e) => e.preventDefault());
+  // the window width changes per dropdown; text may rewrap, so re-measure
+  let lastW = 0;
+  window.addEventListener("resize", () => { if (innerWidth !== lastW) { lastW = innerWidth; sendMenuSize(); } });
   document.addEventListener("keydown", (e) => {
-    const n = S.bookmarks.length;
+    const n = S.menuKind === "links" ? S.bookmarks.length : 0;
     if (e.key === "Escape") send({ t: "menuClose" });
     else if (e.key === "ArrowDown" && n) { kbIndex = (kbIndex + 1) % n; renderMenu(); }
     else if (e.key === "ArrowUp" && n) { kbIndex = (kbIndex - 1 + n) % n; renderMenu(); }

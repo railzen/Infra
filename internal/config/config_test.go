@@ -7,6 +7,33 @@ import (
 	"testing"
 )
 
+func TestExportRoundTrip(t *testing.T) {
+	c := Default()
+	c.DefaultPage = "a"
+	c.Window = &WindowState{X: 1, Y: 2, W: 3, H: 4}
+	c.Bookmarks = []Bookmark{{ID: "a", Name: "OA", URL: "https://oa.corp",
+		Records: []DNSRecord{{Host: "oa.corp", Type: "CNAME", Value: "lb.corp"}}}}
+	c.CAs = []CA{{ID: "x", Name: "Corp Root", PEM: "-----BEGIN CERTIFICATE-----\n..."}}
+	data, err := c.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"X"`)) {
+		t.Fatal("window placement must not be exported")
+	}
+	e, err := ParseExport(append([]byte("\xEF\xBB\xBF"), data...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Settings.DefaultPage != "a" || len(e.Bookmarks) != 1 || e.Bookmarks[0].Records[0].Value != "lb.corp" ||
+		len(e.CAs) != 1 || e.CAs[0].Name != "Corp Root" {
+		t.Fatalf("round trip: %+v", e)
+	}
+	if _, err := ParseExport([]byte(`{"bookmarks":[]}`)); err == nil {
+		t.Fatal("foreign JSON must be rejected")
+	}
+}
+
 func TestTrailerRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	exe := filepath.Join(dir, "Intra.exe")

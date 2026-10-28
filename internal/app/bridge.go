@@ -2,12 +2,15 @@ package app
 
 import (
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +22,7 @@ type inMsg struct {
 	T              string           `json:"t"`
 	X, Y, H        float64
 	Edge           string           `json:"edge"`
+	Kind           string           `json:"kind"`
 	Page           string           `json:"page"`
 	Arg            string           `json:"arg"`
 	ID             string           `json:"id"`
@@ -32,26 +36,28 @@ type inMsg struct {
 	Data           string           `json:"data"`
 }
 
-func (a *App) onMessage(fromMenu bool, raw string) {
-	if a.closing {
+// onMessage handles a message from this window's UI view or dropdown.
+func (w *Window) onMessage(fromMenu bool, raw string) {
+	if w.closing {
 		return
 	}
 	var m inMsg
 	if json.Unmarshal([]byte(raw), &m) != nil {
 		return
 	}
+	a := w.a
 	switch m.T {
 	case "ready":
 		if fromMenu {
-			a.menu.ready = true
+			w.menu.ready = true
 		} else {
-			a.uiReady = true
+			w.uiReady = true
 		}
-		a.push()
+		w.push()
 
 	// --- window chrome ---
 	case "drag":
-		a.beginNCDrag(htCaption)
+		w.beginNCDrag(htCaption)
 	case "resize":
 		hit := uintptr(htTop)
 		switch m.Edge {
@@ -60,51 +66,51 @@ func (a *App) onMessage(fromMenu bool, raw string) {
 		case "tr":
 			hit = 14 // HTTOPRIGHT
 		}
-		a.beginNCDrag(hit)
+		w.beginNCDrag(hit)
 	case "min":
-		pShowWindow.Call(a.hwnd, swMinimize)
+		pShowWindow.Call(w.hwnd, swMinimize)
 	case "max":
-		a.toggleMaximize()
+		w.toggleMaximize()
 	case "close":
-		pPostMessageW.Call(a.hwnd, wmClose, 0, 0)
+		pPostMessageW.Call(w.hwnd, wmClose, 0, 0)
 	case "sysmenu":
-		a.showSystemMenu()
+		w.showSystemMenu()
 
 	// --- dropdown ---
 	case "menu":
-		a.menu.toggle(m.X, m.Y)
+		w.menu.toggle(m.Kind, m.X, m.Y)
 	case "menuSize":
-		a.menu.setHeight(m.H)
+		w.menu.sized(m.Kind, m.H)
 	case "menuClose":
-		a.menu.hide()
+		w.menu.hide()
 
 	// --- navigation ---
 	case "show":
-		a.menu.hide()
-		a.showPage(m.Page, m.Arg)
+		w.menu.hide()
+		w.showPage(m.Page, m.Arg)
 	case "open":
-		a.menu.hide()
-		a.openBookmark(m.ID)
+		w.menu.hide()
+		a.open(w, m.ID)
 	case "nav":
-		if a.cur == nil || a.siteWV == 0 {
+		if w.cur == nil || w.siteWV == 0 {
 			return
 		}
 		switch m.Action {
 		case "back":
-			a.siteWV.GoBack()
+			w.siteWV.GoBack()
 		case "forward":
-			a.siteWV.GoForward()
+			w.siteWV.GoForward()
 		case "reload":
-			a.siteWV.Reload()
+			w.siteWV.Reload()
 		case "stop":
-			a.siteWV.Stop()
+			w.siteWV.Stop()
 		}
 
 	// --- data ---
 	case "saveBookmark":
-		a.saveBookmark(m.Bookmark, m.Open)
+		a.saveBookmark(w, m.Bookmark, m.Open)
 	case "deleteBookmark":
-		a.deleteBookmark(m.ID)
+		a.deleteBookmark(w, m.ID)
 	case "moveBookmark":
 		a.moveBookmark(m.ID, m.Dir)
 	case "settings":
@@ -118,12 +124,124 @@ func (a *App) onMessage(fromMenu bool, raw string) {
 			a.cfg.Window = nil
 		}
 		a.save()
-		a.push()
+		a.pushAll()
 	case "addCA":
-		a.addCA(m.Name, m.Data)
+		a.addCA(w, m.Name, m.Data)
 	case "deleteCA":
-		a.deleteCA(m.ID)
+		a.deleteCA(w, m.ID)
+	case "exportConfig":
+		// the file dialog is modal; run it outside the webview callback
+		a.post(func() { a.exportConfig(w) })
+	case "importConfig":
+		a.post(func() { a.importConfig(w) })
 	}
+}
+
+// dialogOwner keeps the dropdown open while a dialog started from it is shown.
+func (w *Window) dialogOwner() uintptr {
+	if w.menu != nil && w.menu.open {
+		return w.menu.hwnd
+	}
+	return w.hwnd
+}
+
+func (a *App) exportConfig(w *Window) {
+	if w.closing {
+		return
+	}
+	data, err := a.cfg.Export()
+	if err != nil {
+		w.toast("导出失败："+err.Error(), "err")
+		return
+	}
+	path := fileDialog(w.dialogOwner(), true, "导出 Intra 配置", "Intra-配置-"+time.Now().Format("20060102")+".json")
+	if path == "" || w.closing {
+		return
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		w.toast("导出失败："+err.Error(), "err")
+		return
+	}
+	w.toast("已导出到 "+filepath.Base(path), "ok")
+}
+
+// importConfig merges an exported file into the current configuration:
+// links with a known ID are updated, others added; CAs are de-duplicated by
+// fingerprint; settings are taken from the file. Invalid entries are skipped.
+func (a *App) importConfig(w *Window) {
+	if w.closing {
+		return
+	}
+	path := fileDialog(w.dialogOwner(), false, "导入 Intra 配置", "")
+	if path == "" || w.closing {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		w.toast("无法读取文件："+err.Error(), "err")
+		return
+	}
+	e, err := config.ParseExport(data)
+	if err != nil {
+		w.toast(err.Error(), "err")
+		return
+	}
+	added, updated, cas, skipped := a.mergeImport(e)
+	for _, x := range a.windows {
+		if x.cur != nil {
+			if b := a.cfg.Bookmark(x.cur.ID); b != nil {
+				x.cur.Name = b.Name
+				x.updateTitle()
+			}
+		}
+	}
+	a.pushAll()
+	msg := fmt.Sprintf("已导入：新增 %d 个链接，更新 %d 个，CA %d 个", added, updated, cas)
+	if skipped > 0 {
+		msg += fmt.Sprintf("，跳过 %d 项无效内容", skipped)
+	}
+	w.toast(msg, "ok")
+}
+
+// mergeImport applies an exported configuration and saves the result.
+func (a *App) mergeImport(e *config.ExportFormat) (added, updated, cas, skipped int) {
+	for _, b := range e.Bookmarks {
+		b.Records = append([]config.DNSRecord{}, b.Records...)
+		if err := validateBookmark(&b); err != nil {
+			skipped++
+			continue
+		}
+		if existing := a.cfg.Bookmark(b.ID); b.ID != "" && existing != nil {
+			*existing = b
+			updated++
+			continue
+		}
+		if b.ID == "" {
+			b.ID = newID()
+		}
+		a.cfg.Bookmarks = append(a.cfg.Bookmarks, b)
+		added++
+	}
+	for _, ca := range e.CAs {
+		certs, err := netx.ParseCertificates([]byte(ca.PEM))
+		if err != nil {
+			skipped++
+			continue
+		}
+		for _, c := range certs {
+			if a.addCert(c) {
+				cas++
+			}
+		}
+	}
+	a.cfg.RememberWindow = e.Settings.RememberWindow
+	if dp := e.Settings.DefaultPage; dp == "home" || dp == "last" || a.cfg.Bookmark(dp) != nil {
+		a.cfg.DefaultPage = dp
+	}
+	a.applyTrust()
+	a.applyRecords()
+	a.save()
+	return
 }
 
 func newID() string {
@@ -172,12 +290,12 @@ func validateBookmark(b *config.Bookmark) error {
 	return nil
 }
 
-func (a *App) saveBookmark(b *config.Bookmark, open bool) {
+func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
 	if b == nil {
 		return
 	}
 	if err := validateBookmark(b); err != nil {
-		a.toast(err.Error(), "err")
+		w.toast(err.Error(), "err")
 		return
 	}
 	if existing := a.cfg.Bookmark(b.ID); b.ID != "" && existing != nil {
@@ -186,21 +304,28 @@ func (a *App) saveBookmark(b *config.Bookmark, open bool) {
 		b.ID = newID()
 		a.cfg.Bookmarks = append(a.cfg.Bookmarks, *b)
 	}
-	if a.cur != nil && a.cur.ID == b.ID {
-		a.cur.Name = b.Name
-		a.updateWindowTitle()
+	for _, x := range a.windows {
+		if x.cur != nil && x.cur.ID == b.ID {
+			x.cur.Name = b.Name
+			x.updateTitle()
+		}
 	}
 	a.applyRecords()
 	a.save()
-	a.toast("已保存", "ok")
+	w.toast("已保存", "ok")
 	if open {
-		a.openBookmark(b.ID)
-		return
+		// leave the editor; a window already showing a site gets a new one
+		if w.cur != nil {
+			w.showPage("", "")
+		}
+		a.open(w, b.ID)
+	} else {
+		w.showPage("bookmarks", "")
 	}
-	a.showPage("bookmarks", "")
+	a.pushAll()
 }
 
-func (a *App) deleteBookmark(id string) {
+func (a *App) deleteBookmark(w *Window, id string) {
 	out := a.cfg.Bookmarks[:0]
 	for _, b := range a.cfg.Bookmarks {
 		if b.ID != id {
@@ -214,13 +339,19 @@ func (a *App) deleteBookmark(id string) {
 	if a.cfg.LastBookmark == id {
 		a.cfg.LastBookmark = ""
 	}
-	if a.cur != nil && a.cur.ID == id {
-		a.closeSite()
+	for _, x := range a.windows {
+		if x.cur != nil && x.cur.ID == id {
+			x.closeSite()
+			if x != w {
+				x.showPage("home", "")
+			}
+		}
 	}
 	a.applyRecords()
 	a.save()
-	a.toast("已删除", "ok")
-	a.showPage("bookmarks", "")
+	w.toast("已删除", "ok")
+	w.showPage("bookmarks", "")
+	a.pushAll()
 }
 
 func (a *App) moveBookmark(id string, dir int) {
@@ -231,63 +362,66 @@ func (a *App) moveBookmark(id string, dir int) {
 			if j >= 0 && j < len(bs) {
 				bs[i], bs[j] = bs[j], bs[i]
 				a.save()
-				a.push()
+				a.pushAll()
 			}
 			return
 		}
 	}
 }
 
-func (a *App) addCA(name, data string) {
+func (a *App) addCA(w *Window, name, data string) {
 	raw, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		a.toast("无法读取文件", "err")
+		w.toast("无法读取文件", "err")
 		return
 	}
 	certs, err := netx.ParseCertificates(raw)
 	if err != nil {
-		a.toast(name+"："+err.Error(), "err")
+		w.toast(name+"："+err.Error(), "err")
 		return
 	}
 	added, dup := 0, 0
 	for _, c := range certs {
-		fp := netx.Fingerprint(c)
-		exists := false
-		for _, ca := range a.cfg.CAs {
-			if ca.Fingerprint == fp {
-				exists = true
-				break
-			}
-		}
-		if exists {
+		if a.addCert(c) {
+			added++
+		} else {
 			dup++
-			continue
 		}
-		a.cfg.CAs = append(a.cfg.CAs, config.CA{
-			ID:          strings.ReplaceAll(fp, ":", "")[:16],
-			Name:        netx.DisplayName(c),
-			PEM:         netx.CertToPEM(c),
-			Fingerprint: fp,
-			NotAfter:    c.NotAfter.Local().Format("2006-01-02"),
-			AddedAt:     time.Now().Format("2006-01-02"),
-		})
-		added++
 	}
 	if added == 0 {
-		a.toast("证书已存在", "err")
+		w.toast("证书已存在", "err")
 		return
 	}
 	a.applyTrust()
 	a.save()
-	a.push()
+	a.pushAll()
 	msg := fmt.Sprintf("已添加 %d 个 CA 证书", added)
 	if dup > 0 {
 		msg += fmt.Sprintf("（%d 个已存在）", dup)
 	}
-	a.toast(msg, "ok")
+	w.toast(msg, "ok")
 }
 
-func (a *App) deleteCA(id string) {
+// addCert adds a trusted certificate unless one with the same fingerprint exists.
+func (a *App) addCert(c *x509.Certificate) bool {
+	fp := netx.Fingerprint(c)
+	for _, ca := range a.cfg.CAs {
+		if ca.Fingerprint == fp {
+			return false
+		}
+	}
+	a.cfg.CAs = append(a.cfg.CAs, config.CA{
+		ID:          strings.ReplaceAll(fp, ":", "")[:16],
+		Name:        netx.DisplayName(c),
+		PEM:         netx.CertToPEM(c),
+		Fingerprint: fp,
+		NotAfter:    c.NotAfter.Local().Format("2006-01-02"),
+		AddedAt:     time.Now().Format("2006-01-02"),
+	})
+	return true
+}
+
+func (a *App) deleteCA(w *Window, id string) {
 	out := a.cfg.CAs[:0]
 	for _, c := range a.cfg.CAs {
 		if c.ID != id {
@@ -297,6 +431,6 @@ func (a *App) deleteCA(id string) {
 	a.cfg.CAs = out
 	a.applyTrust()
 	a.save()
-	a.push()
-	a.toast("已删除证书", "ok")
+	a.pushAll()
+	w.toast("已删除证书", "ok")
 }

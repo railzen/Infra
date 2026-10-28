@@ -89,11 +89,14 @@ type Store struct {
 func NewStore(exePath string) *Store {
 	s := &Store{path: exePath}
 	// left over from a previous save while that process was running
-	os.Remove(exePath + ".old")
+	os.Remove(s.OldPath())
 	return s
 }
 
 func (s *Store) Path() string { return s.path }
+
+// OldPath is where Save moves the running executable when it cannot be overwritten.
+func (s *Store) OldPath() string { return s.path + ".old" }
 
 // split returns the PE image and the payload (nil if none).
 func split(data []byte) (image, payload []byte) {
@@ -169,7 +172,7 @@ func (s *Store) Save(c *Config) error {
 	if err := os.Rename(tmp, s.path); err == nil {
 		return nil
 	}
-	old := s.path + ".old"
+	old := s.OldPath()
 	os.Remove(old)
 	if err := os.Rename(s.path, old); err != nil {
 		os.Remove(tmp)

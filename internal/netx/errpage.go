@@ -50,8 +50,7 @@ func writeErrorPage(w http.ResponseWriter, host string, err error) {
 const errorTemplate = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>%s</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{--bg:#fff;--fg:#1a1c1f;--muted:#5d5d5d;--faint:#8f8f8f;--border:#0000001a;--soft:#00000008;color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root{--bg:#181818;--fg:#dfdfdf;--muted:#cdcdcd;--faint:#afafaf;--border:#ffffff26;--soft:#ffffff08}}
+:root{--bg:#fff;--fg:#1a1c1f;--muted:#5d5d5d;--faint:#8f8f8f;--border:#0000001a;--soft:#00000008;color-scheme:light}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);
 font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei UI",sans-serif;padding:24px}

@@ -11,30 +11,35 @@ import (
 	"intra/ui"
 )
 
-const popupWidthDIP = 320
+// dropdown widths in DIPs, by kind
+var popupWidths = map[string]float64{"links": 320, "settings": 420, "about": 340}
 
-// popup is the favorites dropdown. It is a separate owned top-level window so
-// it can overlap the site webview, which a DOM element in the bar could not.
+// popup hosts the title bar dropdowns (links, settings, about). It is a
+// separate owned top-level window so it can overlap the site webview, which a
+// DOM element in the bar could not.
 type popup struct {
-	a        *App
-	hwnd     uintptr
-	wv       *edge.Chromium
-	ready    bool
-	open     bool
-	hiddenAt time.Time
+	w         *Window
+	hwnd      uintptr
+	wv        *edge.Chromium
+	ready     bool
+	open      bool
+	kind      string // which dropdown the content currently shows
+	pending   bool   // open requested, waiting for the content to report its height
+	lastKind  string // kind of the most recently hidden dropdown
+	hiddenAt  time.Time
 	heightCSS float64
-	anchor   point // client coordinates (physical px) of the menu button's bottom-left
+	anchor    point // client coordinates (physical px) of the menu button's bottom-left
 }
 
-var thePopup *popup
+var (
+	popupsByHwnd   = map[uintptr]*popup{}
+	popupClassDone bool
+)
 
-func newPopup(a *App) *popup {
-	p := &popup{a: a, heightCSS: 120}
-	thePopup = p
+func newPopup(w *Window) *popup {
+	a := w.a
+	p := &popup{w: w, kind: "links", heightCSS: 120}
 	r, g, b := a.bgColor()
-	if a.dark {
-		r, g, b = 0x21, 0x21, 0x21
-	}
 	brush, _, _ := pCreateSolidBrush.Call(uintptr(r) | uintptr(g)<<8 | uintptr(b)<<16)
 	cls := a.className() + "-popup"
 	wc := wndClassEx{
@@ -45,23 +50,27 @@ func newPopup(a *App) *popup {
 		ClassName:  u16(cls),
 	}
 	wc.Size = uint32(unsafe.Sizeof(wc))
-	pRegisterClassExW.Call(ptr(&wc))
+	if !popupClassDone {
+		pRegisterClassExW.Call(ptr(&wc))
+		popupClassDone = true
+	}
 	h, _, _ := pCreateWindowExW.Call(wsExToolWindow, ptr(u16(cls)), ptr(u16("Intra")),
-		wsPopup|wsClipChildren, 0, 0, uintptr(popupWidthDIP*a.scale()), 200, a.hwnd, 0, hInstance(), 0)
+		wsPopup|wsClipChildren, 0, 0, uintptr(popupWidths["links"]*w.scale()), 200, w.hwnd, 0, hInstance(), 0)
 	if h == 0 {
 		return p
 	}
 	p.hwnd = h
+	popupsByHwnd[h] = p
 	setDwmAttr(h, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/, 2 /*DWMWCP_ROUND*/)
 
 	p.wv = a.newChromium()
 	p.wv.MessageCallback = func(m string, _ *edge.ICoreWebView2, _ *edge.ICoreWebView2WebMessageReceivedEventArgs) {
-		a.onMessage(true, m)
+		w.onMessage(true, m)
 	}
 	p.wv.Embed(h)
 	p.wv.SetBackgroundColour(r, g, b, 255)
 	lockDownUI(p.wv)
-	putRasterScale(p.wv, a.scale())
+	putRasterScale(p.wv, w.scale())
 	p.wv.Init(`window.__INTRA_MODE="menu"`)
 	p.wv.Resize()
 	p.wv.NavigateToString(ui.HTML)
@@ -70,37 +79,58 @@ func newPopup(a *App) *popup {
 
 func (p *popup) setRasterScale(s float64) { putRasterScale(p.wv, s) }
 
-func (p *popup) toggle(xCSS, yCSS float64) {
+func (p *popup) toggle(kind string, xCSS, yCSS float64) {
 	if p.hwnd == 0 || !p.ready {
 		return
 	}
-	if p.open {
+	if _, ok := popupWidths[kind]; !ok {
+		return
+	}
+	if p.open && kind == p.kind {
 		p.hide()
 		return
 	}
-	// the mousedown that deactivated (and so closed) the popup also lands here
-	if time.Since(p.hiddenAt) < 300*time.Millisecond {
+	// the mousedown that deactivated (and so closed) this dropdown also lands
+	// here; only a different button should open something
+	if !p.open && kind == p.lastKind && time.Since(p.hiddenAt) < 300*time.Millisecond {
 		return
 	}
-	s := p.a.scale()
+	s := p.w.scale()
 	p.anchor = point{int32(math.Round(xCSS * s)), int32(math.Round((yCSS + 4) * s))}
 	p.open = true
+	if kind != p.kind {
+		// let the page render the new panel and report its height first, so
+		// the window never flashes at the previous dropdown's size
+		p.kind = kind
+		p.pending = true
+		pShowWindow.Call(p.hwnd, swHide)
+		// lay the content out at the new width before it measures its height
+		w := int32(popupWidths[kind] * s)
+		pSetWindowPos.Call(p.hwnd, 0, 0, 0, uintptr(w), uintptr(int32(p.heightCSS*s)), swpNoMove|swpNoZOrder|swpNoActivate)
+		p.wv.Resize()
+		p.w.push()
+		return
+	}
+	p.show()
+	p.w.push()
+}
+
+func (p *popup) show() {
 	p.place()
 	pShowWindow.Call(p.hwnd, swShow)
 	pSetForegroundWindow.Call(p.hwnd)
 	p.wv.Resize()
 	p.wv.Show()
 	p.wv.Focus()
-	p.a.push()
 }
 
 func (p *popup) place() {
-	s := p.a.scale()
+	s := p.w.scale()
 	pt := p.anchor
-	pClientToScreen.Call(p.a.hwnd, ptr(&pt))
-	w := int32(popupWidthDIP * s)
+	pClientToScreen.Call(p.w.hwnd, ptr(&pt))
+	w := int32(popupWidths[p.kind] * s)
 	h := int32(math.Ceil(p.heightCSS * s))
-	mon, _, _ := pMonitorFromWindow.Call(p.a.hwnd, 2 /*MONITOR_DEFAULTTONEAREST*/)
+	mon, _, _ := pMonitorFromWindow.Call(p.w.hwnd, 2 /*MONITOR_DEFAULTTONEAREST*/)
 	mi := monitorInfo{}
 	mi.Size = uint32(unsafe.Sizeof(mi))
 	pGetMonitorInfoW.Call(mon, ptr(&mi))
@@ -109,14 +139,21 @@ func (p *popup) place() {
 	pSetWindowPos.Call(p.hwnd, 0, uintptr(x), uintptr(pt.Y), uintptr(w), uintptr(max(h, int32(40*s))), swpNoActivate)
 }
 
-func (p *popup) setHeight(hCSS float64) {
-	if hCSS <= 0 || hCSS == p.heightCSS {
+// sized receives the content height the page measured for a dropdown kind.
+func (p *popup) sized(kind string, hCSS float64) {
+	if kind != p.kind || hCSS <= 0 {
 		return
 	}
 	p.heightCSS = hCSS
-	if p.open {
-		p.place()
+	if !p.open {
+		return
 	}
+	if p.pending {
+		p.pending = false
+		p.show()
+		return
+	}
+	p.place()
 }
 
 func (p *popup) hide() {
@@ -124,31 +161,46 @@ func (p *popup) hide() {
 		return
 	}
 	p.open = false
+	p.pending = false
+	p.lastKind = p.kind
 	p.hiddenAt = time.Now()
 	pShowWindow.Call(p.hwnd, swHide)
 	p.wv.Hide()
-	p.a.push()
+	p.w.push()
+}
+
+// ownedBy reports whether h is owner or one of the windows owned (directly or
+// indirectly) by owner, e.g. the file picker opened from the settings dropdown.
+func ownedBy(h, owner uintptr) bool {
+	for i := 0; h != 0 && i < 16; i++ {
+		if h == owner {
+			return true
+		}
+		h, _, _ = pGetWindow.Call(h, 4 /*GW_OWNER*/)
+	}
+	return false
 }
 
 func popupWndProc(hwnd, m, wp, lp uintptr) uintptr {
-	p := thePopup
-	if theApp != nil && theApp.closing {
+	if m == wmDestroy {
+		delete(popupsByHwnd, hwnd)
+	}
+	p := popupsByHwnd[hwnd]
+	if p == nil || p.w.closing {
 		r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)
 		return r
 	}
 	switch m {
 	case wmActivate:
-		if p != nil && wp&0xffff == waInactive {
+		if wp&0xffff == waInactive && !ownedBy(lp, hwnd) {
 			p.hide()
 		}
 	case wmSize:
-		if p != nil && p.wv != nil {
+		if p.wv != nil {
 			p.wv.Resize()
 		}
 	case wmClose:
-		if p != nil {
-			p.hide()
-		}
+		p.hide()
 		return 0
 	}
 	r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)

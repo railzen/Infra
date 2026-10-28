@@ -1,11 +1,5 @@
 <svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3D7BFF"/>
-      <stop offset="1" stop-color="#7B3FF2"/>
-    </linearGradient>
-  </defs>
-  <path d="M68 8H188A60 60 0 0 1 248 68V188A60 60 0 0 1 188 248H68A60 60 0 0 1 8 188V68A60 60 0 0 1 68 8Z" fill="url(#lg)"/>
-  <path d="M154.2 63.1A70 70 0 0 1 154.2 192.9M101.8 192.9A70 70 0 0 1 101.8 63.1" fill="none" stroke="#fff" stroke-opacity="0.92" stroke-width="16" stroke-linecap="round"/>
-  <path d="M128 52V204" fill="none" stroke="#fff" stroke-width="20" stroke-linecap="round"/>
+  <!-- O: the disc. One line crosses it: a sharp peak (A) and a round valley (U), zigzagging like a Z. -->
+  <circle cx="128" cy="128" r="120" fill="#111111"/>
+  <path d="M52 136L90 80L126 133C134 146 146 174 166 174C186 174 204 158 204 134" fill="none" stroke="#ffffff" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

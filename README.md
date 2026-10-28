@@ -18,7 +18,7 @@ WebView2 ──(--proxy-server)──► 本地代理 127.0.0.1:随机端口 ─
 WebView2 通过 `--ignore-certificate-errors-spki-list` 只接受这把每次启动随机生成、从不落盘的密钥，
 因此系统证书库对 Intra 内的网页不起作用；上游证书校验失败时显示 Intra 自己的错误页。
 
-界面（`ui/index.html`）的标题栏尺寸、字体、颜色、圆角、窗口按钮取自 Codex 桌面版：36px 标题栏、14px 菜单文字、6px 圆角按钮、46px 宽的 Windows 风格窗口按钮。明暗主题跟随系统。
+界面（`ui/index.html`）的标题栏尺寸、字体、颜色、圆角、窗口按钮取自 Codex 桌面版：36px 标题栏、14px 菜单文字、6px 圆角按钮、46px 宽的 Windows 风格窗口按钮。界面统一为白色简约风格。
 
 ## 构建
 

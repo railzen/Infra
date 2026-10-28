@@ -50,6 +50,7 @@ var (
 	pGetCursorPos             = user32.NewProc("GetCursorPos")
 	pSetProcessDpiAwarenessCx = user32.NewProc("SetProcessDpiAwarenessContext")
 	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
+	pGetWindow                = user32.NewProc("GetWindow")
 	pCreateSolidBrush         = windows.NewLazySystemDLL("gdi32.dll").NewProc("CreateSolidBrush")
 	pDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
@@ -242,18 +243,3 @@ func setDwmAttr(hwnd uintptr, attr uint32, val int32) {
 func loword(v uintptr) int32 { return int32(int16(v & 0xffff)) }
 func hiword(v uintptr) int32 { return int32(int16((v >> 16) & 0xffff)) }
 
-// systemDarkMode reads the "apps use light theme" preference.
-func systemDarkMode() bool {
-	var k windows.Handle
-	if windows.RegOpenKeyEx(windows.HKEY_CURRENT_USER,
-		u16(`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`), 0, windows.KEY_READ, &k) != nil {
-		return false
-	}
-	defer windows.RegCloseKey(k)
-	var v, typ uint32
-	n := uint32(4)
-	if windows.RegQueryValueEx(k, u16("AppsUseLightTheme"), nil, &typ, (*byte)(unsafe.Pointer(&v)), &n) != nil {
-		return false
-	}
-	return v == 0
-}

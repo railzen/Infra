@@ -1,20 +1,40 @@
 package app
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"unsafe"
 
 	"github.com/wailsapp/go-webview2/pkg/edge"
 	"golang.org/x/sys/windows"
 
 	"intra/internal/config"
+	"intra/ui"
 )
 
-var theApp *App // the window procedure needs a way back to the App
+// Window is one top-level Intra window: a title bar/pages webview, a site
+// webview and its own dropdown popup.
+type Window struct {
+	a       *App
+	hwnd    uintptr
+	ui      *edge.Chromium
+	site    *edge.Chromium
+	siteWV  webview
+	uiReady bool
+	menu    *popup
 
-func (a *App) scale() float64 { return float64(dpiOf(a.hwnd)) / 96 }
+	page, pageArg string
+	cur           *siteState
+	active        bool
+	closing       bool
+}
 
-func (a *App) barPx() int32 { return int32(math.Round(barHeightDIP * a.scale())) }
+var windowsByHwnd = map[uintptr]*Window{}
+
+func (w *Window) scale() float64 { return float64(dpiOf(w.hwnd)) / 96 }
+
+func (w *Window) barPx() int32 { return int32(math.Round(barHeightDIP * w.scale())) }
 
 func hInstance() uintptr {
 	h, _, _ := pGetModuleHandleW.Call(0)
@@ -27,8 +47,7 @@ func appIcon(size int) uintptr {
 	return h
 }
 
-func (a *App) createWindow() error {
-	theApp = a
+func (a *App) registerWindowClass() error {
 	r, g, b := a.bgColor()
 	brush, _, _ := pCreateSolidBrush.Call(uintptr(r) | uintptr(g)<<8 | uintptr(b)<<16)
 	cursor, _, _ := pLoadCursorW.Call(0, 32512 /*IDC_ARROW*/)
@@ -46,24 +65,124 @@ func (a *App) createWindow() error {
 	if atom, _, err := pRegisterClassExW.Call(ptr(&wc)); atom == 0 {
 		return err
 	}
+	return nil
+}
+
+// newWindow creates and shows a window. A window opened from another one is
+// cascaded from it; the first window uses the remembered placement.
+func (a *App) newWindow(from *Window) (*Window, error) {
+	w := &Window{a: a, active: true}
 	const cwUseDefault = 0x80000000
 	h, _, err := pCreateWindowExW.Call(0, ptr(u16(a.className())), ptr(u16("Intra")),
 		wsOverlappedWindow|wsClipChildren,
 		cwUseDefault, cwUseDefault, cwUseDefault, cwUseDefault, 0, 0, hInstance(), 0)
 	if h == 0 {
-		return err
+		return nil, err
 	}
-	a.hwnd = h
-	if a.dark {
-		setDwmAttr(h, 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, 1)
+	w.hwnd = h
+	windowsByHwnd[h] = w
+	a.windows = append(a.windows, w)
+	if from != nil {
+		w.cascadeFrom(from)
+	} else {
+		w.restorePlacement()
 	}
-	return nil
+	w.embed()
+	w.menu = newPopup(w)
+	return w, nil
 }
+
+func (w *Window) embed() {
+	a := w.a
+	// --- UI: title bar + pages ---
+	w.ui = a.newChromium()
+	w.ui.MessageCallback = func(m string, _ *edge.ICoreWebView2, _ *edge.ICoreWebView2WebMessageReceivedEventArgs) {
+		w.onMessage(false, m)
+	}
+	w.ui.Embed(w.hwnd)
+	r, g, b := a.bgColor()
+	w.ui.SetBackgroundColour(r, g, b, 255)
+	lockDownUI(w.ui)
+	w.ui.Init(`window.__INTRA_MODE="main"`)
+	w.layout()
+	w.ui.NavigateToString(ui.HTML)
+
+	// --- site ---
+	w.site = a.newChromium()
+	w.site.Embed(w.hwnd)
+	w.site.SetBackgroundColour(r, g, b, 255)
+	if s, err := w.site.GetSettings(); err == nil {
+		// Sites must not reach the bridge: go-webview2 terminates the process
+		// on non-string web messages, and the site has no business talking to Go.
+		s.PutIsWebMessageEnabled(false)
+		s.PutAreHostObjectsAllowed(false)
+		s.PutIsStatusBarEnabled(true)
+	}
+	w.site.Hide()
+	w.siteWV = webviewOf(w.site)
+	w.hookSite()
+	w.setRasterScale()
+	w.layout()
+}
+
+func (w *Window) hookSite() {
+	wv := w.siteWV
+	if wv == 0 {
+		return
+	}
+	vt := wv.vt()
+	wv.on(vt.AddDocumentTitleChanged, func(_, _ uintptr) {
+		if w.cur != nil {
+			w.cur.Title = wv.Title()
+			w.updateTitle()
+			w.push()
+		}
+	})
+	wv.on(vt.AddHistoryChanged, func(_, _ uintptr) {
+		if w.cur != nil {
+			w.cur.CanBack, w.cur.CanFwd = wv.CanGoBack(), wv.CanGoForward()
+			w.push()
+		}
+	})
+	wv.on(vt.AddSourceChanged, func(_, _ uintptr) {
+		if w.cur != nil {
+			w.cur.URL = wv.Source()
+		}
+	})
+	wv.on(vt.AddNavigationStarting, func(_, _ uintptr) {
+		if w.cur != nil && !w.cur.Loading {
+			w.cur.Loading = true
+			w.push()
+		}
+	})
+	w.site.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		if w.cur != nil {
+			w.cur.Loading = false
+			w.cur.CanBack, w.cur.CanFwd = wv.CanGoBack(), wv.CanGoForward()
+			w.push()
+		}
+	}
+	// keep window.open / target=_blank inside the app window
+	wv.on(vt.AddNewWindowRequested, func(_, args uintptr) {
+		uri := newWindowURI(args)
+		newWindowHandled(args)
+		low := strings.ToLower(uri)
+		switch {
+		case strings.HasPrefix(low, "http://"), strings.HasPrefix(low, "https://"):
+			w.site.Navigate(uri)
+		case uri != "" && !strings.HasPrefix(low, "javascript:") && !strings.HasPrefix(low, "file:"):
+			shellOpen(uri)
+		}
+	})
+}
+
+// ---------------------------------------------------------------- placement
 
 // restorePlacement shows the window, either where it was last closed or
 // centered on the primary monitor's work area.
-func (a *App) restorePlacement() {
-	if ws := a.cfg.Window; a.cfg.RememberWindow && ws != nil && ws.W > 200 && ws.H > 150 && a.onScreen(ws) {
+func (w *Window) restorePlacement() {
+	cfg := w.a.cfg
+	if ws := cfg.Window; cfg.RememberWindow && ws != nil && ws.W > 200 && ws.H > 150 && onScreen(ws) {
 		wp := windowPlacement{
 			ShowCmd:        swShowNormal,
 			NormalPosition: rect{int32(ws.X), int32(ws.Y), int32(ws.X + ws.W), int32(ws.Y + ws.H)},
@@ -72,74 +191,108 @@ func (a *App) restorePlacement() {
 			wp.ShowCmd = swShowMaximized
 		}
 		wp.Length = uint32(unsafe.Sizeof(wp))
-		pSetWindowPlacement.Call(a.hwnd, ptr(&wp))
+		pSetWindowPlacement.Call(w.hwnd, ptr(&wp))
 		return
 	}
-	s := a.scale()
-	w, h := int32(1280*s), int32(820*s)
-	mon, _, _ := pMonitorFromWindow.Call(a.hwnd, 1 /*MONITOR_DEFAULTTOPRIMARY*/)
+	s := w.scale()
+	ww, hh := int32(1280*s), int32(820*s)
+	mon, _, _ := pMonitorFromWindow.Call(w.hwnd, 1 /*MONITOR_DEFAULTTOPRIMARY*/)
 	mi := monitorInfo{}
 	mi.Size = uint32(unsafe.Sizeof(mi))
 	pGetMonitorInfoW.Call(mon, ptr(&mi))
 	wk := mi.Work
-	w, h = min(w, wk.W()-int32(40*s)), min(h, wk.H()-int32(40*s))
-	x, y := wk.Left+(wk.W()-w)/2, wk.Top+(wk.H()-h)/2
-	pSetWindowPos.Call(a.hwnd, 0, uintptr(x), uintptr(y), uintptr(w), uintptr(h), swpNoZOrder|swpFrameChanged)
-	pShowWindow.Call(a.hwnd, swShowNormal)
+	ww, hh = min(ww, wk.W()-int32(40*s)), min(hh, wk.H()-int32(40*s))
+	x, y := wk.Left+(wk.W()-ww)/2, wk.Top+(wk.H()-hh)/2
+	pSetWindowPos.Call(w.hwnd, 0, uintptr(x), uintptr(y), uintptr(ww), uintptr(hh), swpNoZOrder|swpFrameChanged)
+	pShowWindow.Call(w.hwnd, swShowNormal)
+}
+
+// cascadeFrom places the window at the source window's normal position,
+// offset down and to the right, keeping it inside the work area.
+func (w *Window) cascadeFrom(from *Window) {
+	wp := windowPlacement{}
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	pGetWindowPlacement.Call(from.hwnd, ptr(&wp))
+	n := wp.NormalPosition
+	s := from.scale()
+	off := int32(32 * s)
+	mon, _, _ := pMonitorFromWindow.Call(from.hwnd, 2 /*MONITOR_DEFAULTTONEAREST*/)
+	mi := monitorInfo{}
+	mi.Size = uint32(unsafe.Sizeof(mi))
+	pGetMonitorInfoW.Call(mon, ptr(&mi))
+	x, y := n.Left+off, n.Top+off
+	if x+n.W() > mi.Work.Right || y+n.H() > mi.Work.Bottom {
+		x, y = mi.Work.Left+off, mi.Work.Top+off
+	}
+	out := windowPlacement{ShowCmd: swShowNormal, NormalPosition: rect{x, y, x + n.W(), y + n.H()}}
+	if isZoomed(from.hwnd) {
+		out.ShowCmd = swShowMaximized
+	}
+	out.Length = uint32(unsafe.Sizeof(out))
+	pSetWindowPlacement.Call(w.hwnd, ptr(&out))
 }
 
 // onScreen reports whether the saved window's title area is on any monitor.
-func (a *App) onScreen(ws *config.WindowState) bool {
+func onScreen(ws *config.WindowState) bool {
 	pt := point{int32(ws.X + ws.W/2), int32(ws.Y + 10)}
 	m, _, _ := pMonitorFromPoint.Call(uintptr(uint32(pt.X))|uintptr(uint32(pt.Y))<<32, 0 /*MONITOR_DEFAULTTONULL*/)
 	return m != 0
 }
 
-func (a *App) rememberPlacement() {
-	if !a.cfg.RememberWindow {
+func (w *Window) rememberPlacement() {
+	if !w.a.cfg.RememberWindow {
 		return
 	}
 	wp := windowPlacement{}
 	wp.Length = uint32(unsafe.Sizeof(wp))
-	if r, _, _ := pGetWindowPlacement.Call(a.hwnd, ptr(&wp)); r == 0 {
+	if r, _, _ := pGetWindowPlacement.Call(w.hwnd, ptr(&wp)); r == 0 {
 		return
 	}
 	n := wp.NormalPosition
-	a.cfg.Window = &config.WindowState{X: int(n.Left), Y: int(n.Top), W: int(n.W()), H: int(n.H()),
+	w.a.cfg.Window = &config.WindowState{X: int(n.Left), Y: int(n.Top), W: int(n.W()), H: int(n.H()),
 		Maximized: wp.ShowCmd == swShowMaximized || (wp.ShowCmd == swShowMinimized && wp.Flags&2 != 0)}
 }
 
+func (w *Window) activate() {
+	if isIconic(w.hwnd) {
+		pShowWindow.Call(w.hwnd, swRestore)
+	}
+	pSetForegroundWindow.Call(w.hwnd)
+}
+
+// ---------------------------------------------------------------- layout
+
 // layout positions the two webviews: the UI view owns the title bar strip,
-// and the whole client area while a page (settings, favorites…) is shown.
-func (a *App) layout() {
-	if a.ui == nil || a.ui.GetController() == nil {
+// and the whole client area while a page (home, links manager…) is shown.
+func (w *Window) layout() {
+	if w.ui == nil || w.ui.GetController() == nil {
 		return
 	}
-	cr := clientRect(a.hwnd)
-	bar := a.barPx()
-	full := a.page != "" || a.cur == nil
+	cr := clientRect(w.hwnd)
+	bar := w.barPx()
+	full := w.page != "" || w.cur == nil
 	if full {
-		a.ui.SetSize(edge.Rect{Left: 0, Top: 0, Right: cr.Right, Bottom: cr.Bottom})
+		w.ui.SetSize(edge.Rect{Left: 0, Top: 0, Right: cr.Right, Bottom: cr.Bottom})
 	} else {
-		a.ui.SetSize(edge.Rect{Left: 0, Top: 0, Right: cr.Right, Bottom: bar})
+		w.ui.SetSize(edge.Rect{Left: 0, Top: 0, Right: cr.Right, Bottom: bar})
 	}
-	if a.site != nil && a.site.GetController() != nil {
-		a.site.SetSize(edge.Rect{Left: 0, Top: bar, Right: cr.Right, Bottom: max(cr.Bottom, bar)})
+	if w.site != nil && w.site.GetController() != nil {
+		w.site.SetSize(edge.Rect{Left: 0, Top: bar, Right: cr.Right, Bottom: max(cr.Bottom, bar)})
 		if full {
-			a.site.Hide()
+			w.site.Hide()
 		} else {
-			a.site.Show()
+			w.site.Show()
 		}
 	}
 }
 
-func (a *App) setRasterScale() {
-	s := a.scale()
-	for _, c := range []*edge.Chromium{a.ui, a.site} {
+func (w *Window) setRasterScale() {
+	s := w.scale()
+	for _, c := range []*edge.Chromium{w.ui, w.site} {
 		putRasterScale(c, s)
 	}
-	if a.menu != nil {
-		putRasterScale(a.menu.wv, s)
+	if w.menu != nil {
+		putRasterScale(w.menu.wv, s)
 	}
 }
 
@@ -158,17 +311,144 @@ func putRasterScale(c *edge.Chromium, s float64) {
 	comCall(uintptr(unsafe.Pointer(c3)), 29, uintptr(math.Float64bits(s)))
 }
 
-func (a *App) notifyMoved() {
-	for _, c := range []*edge.Chromium{a.ui, a.site} {
+// closeController calls ICoreWebView2Controller::Close (vtable slot 24) so
+// the browser side releases a window's webview while other windows live on.
+func closeController(c *edge.Chromium) {
+	if c == nil || c.GetController() == nil {
+		return
+	}
+	c.ShuttingDown()
+	comCall(uintptr(unsafe.Pointer(c.GetController())), 24)
+}
+
+func (w *Window) notifyMoved() {
+	for _, c := range []*edge.Chromium{w.ui, w.site} {
 		if c != nil {
 			c.NotifyParentWindowPositionChanged()
 		}
 	}
 }
 
+// ---------------------------------------------------------------- page state
+
+func (w *Window) startPage() {
+	cfg := w.a.cfg
+	dp := cfg.DefaultPage
+	if dp == "last" {
+		dp = cfg.LastBookmark
+	}
+	if dp != "" && dp != "home" && cfg.Bookmark(dp) != nil {
+		w.openBookmark(dp)
+		return
+	}
+	w.showPage("home", "")
+}
+
+func (w *Window) showPage(page, arg string) {
+	if page == "" && w.cur == nil {
+		page = "home"
+	}
+	w.page, w.pageArg = page, arg
+	w.layout()
+	w.push()
+	if page == "" {
+		w.focusSite()
+	} else if w.ui != nil {
+		w.ui.Focus()
+	}
+}
+
+func (w *Window) focusSite() {
+	if w.site != nil && w.cur != nil && w.page == "" {
+		w.site.Focus()
+	}
+}
+
+// openBookmark loads a bookmark in this window.
+func (w *Window) openBookmark(id string) {
+	b := w.a.cfg.Bookmark(id)
+	if b == nil {
+		return
+	}
+	w.cur = &siteState{ID: b.ID, Name: b.Name, URL: b.URL, Loading: true}
+	w.a.applyRecords()
+	w.page, w.pageArg = "", ""
+	w.layout()
+	w.site.Navigate(normalizeURL(b.URL))
+	w.a.cfg.LastBookmark = id
+	w.updateTitle()
+	w.push()
+	w.focusSite()
+}
+
+func (w *Window) closeSite() {
+	w.cur = nil
+	if w.site != nil {
+		w.site.Navigate("about:blank")
+	}
+	w.updateTitle()
+}
+
+func (w *Window) updateTitle() {
+	t := "Intra"
+	if w.cur != nil {
+		name := w.cur.Name
+		if w.cur.Title != "" {
+			name = w.cur.Title
+		}
+		t = name + " - Intra"
+	}
+	pSetWindowTextW.Call(w.hwnd, ptr(u16(t)))
+}
+
+func (w *Window) state() *stateMsg {
+	s := w.a.baseState()
+	s.Current, s.Page, s.PageArg, s.Active = w.cur, w.page, w.pageArg, w.active
+	if w.menu != nil {
+		s.MenuOpen, s.MenuKind = w.menu.open, w.menu.kind
+	}
+	s.Maximized = w.hwnd != 0 && isZoomed(w.hwnd)
+	return s
+}
+
+// push sends this window's full state to its front-ends.
+func (w *Window) push() {
+	if w.ui == nil || w.closing {
+		return
+	}
+	j, err := json.Marshal(w.state())
+	if err != nil {
+		return
+	}
+	script := "window.intra&&intra.recv(" + string(j) + ")"
+	if w.uiReady {
+		w.ui.Eval(script)
+	}
+	if w.menu != nil && w.menu.ready {
+		w.menu.wv.Eval(script)
+	}
+}
+
+func (w *Window) toast(text, kind string) {
+	if !w.uiReady || w.closing {
+		return
+	}
+	j, _ := json.Marshal(map[string]string{"t": "toast", "text": text, "kind": kind})
+	script := "window.intra&&intra.recv(" + string(j) + ")"
+	// while a dropdown is open it is what the user is looking at; the main UI
+	// view is only the 36px bar when a site is shown
+	if w.menu != nil && w.menu.open && w.menu.ready {
+		w.menu.wv.Eval(script)
+		return
+	}
+	w.ui.Eval(script)
+}
+
+// ---------------------------------------------------------------- window procedure
+
 func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
-	a := theApp
-	if a != nil && a.closing && m != wmDestroy {
+	w := windowsByHwnd[hwnd]
+	if w != nil && w.closing && m != wmDestroy {
 		// the webview controllers are being torn down; any call into them now
 		// fails, and go-webview2 terminates the process on such failures
 		r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)
@@ -205,33 +485,32 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 		return r
 	case wmSize:
-		if a != nil {
-			a.layout()
-			if a.menu != nil {
-				a.menu.hide()
+		if w != nil {
+			w.layout()
+			if w.menu != nil {
+				w.menu.hide()
 			}
-			a.push()
+			w.push()
 		}
 	case wmMove, wmMoving:
-		if a != nil {
-			a.notifyMoved()
-			if a.menu != nil && m == wmMoving {
-				a.menu.hide()
+		if w != nil {
+			w.notifyMoved()
+			if w.menu != nil && m == wmMoving {
+				w.menu.hide()
 			}
 		}
 	case wmActivate:
-		if a != nil {
-			other := lp
+		if w != nil {
 			active := wp&0xffff != waInactive
-			if !active && a.menu != nil && other == a.menu.hwnd {
-				active = true // the favorites dropdown keeps the window looking active
+			if !active && w.menu != nil && lp == w.menu.hwnd {
+				active = true // an open dropdown keeps the window looking active
 			}
-			if active != a.active {
-				a.active = active
-				a.push()
+			if active != w.active {
+				w.active = active
+				w.push()
 			}
-			if wp&0xffff != waInactive && a.page == "" {
-				a.focusSite()
+			if wp&0xffff != waInactive && w.page == "" {
+				w.focusSite()
 			}
 		}
 	case wmGetMinMaxInfo:
@@ -242,43 +521,22 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmDpiChanged:
 		r := (*rect)(unsafe.Pointer(lp))
 		pSetWindowPos.Call(hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.W()), uintptr(r.H()), swpNoZOrder|swpNoActivate)
-		if a != nil {
-			a.setRasterScale()
-			a.layout()
-		}
-		return 0
-	case wmSettingChange:
-		if a != nil && lp != 0 && windows.UTF16PtrToString((*uint16)(unsafe.Pointer(lp))) == "ImmersiveColorSet" {
-			a.dark = systemDarkMode()
-			v := int32(0)
-			if a.dark {
-				v = 1
-			}
-			setDwmAttr(hwnd, 20, v)
-		}
-	case wmAppCall:
-		if a != nil {
-			a.runQueue()
+		if w != nil {
+			w.setRasterScale()
+			w.layout()
 		}
 		return 0
 	case wmClose:
-		if a != nil {
-			a.rememberPlacement()
-			a.closing = true
-			for _, c := range []*edge.Chromium{a.ui, a.site} {
-				if c != nil {
-					c.ShuttingDown()
-				}
-			}
-			if a.menu != nil && a.menu.wv != nil {
-				a.menu.wv.ShuttingDown()
-			}
-			a.saver.flush(a.cfg.Clone())
+		if w != nil {
+			w.a.closeWindow(w)
 		}
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
-		pPostQuitMessage.Call(0)
+		delete(windowsByHwnd, hwnd)
+		if theApp != nil && len(theApp.windows) == 0 {
+			pPostQuitMessage.Call(0)
+		}
 		return 0
 	}
 	r, _, _ := pDefWindowProcW.Call(hwnd, m, wp, lp)
@@ -293,26 +551,26 @@ func cursorLParam() uintptr {
 	return uintptr(uint16(pt.X)) | uintptr(uint16(pt.Y))<<16
 }
 
-func (a *App) beginNCDrag(hit uintptr) {
+func (w *Window) beginNCDrag(hit uintptr) {
 	pReleaseCapture.Call()
-	pPostMessageW.Call(a.hwnd, wmNCLButtonDown, hit, cursorLParam())
+	pPostMessageW.Call(w.hwnd, wmNCLButtonDown, hit, cursorLParam())
 }
 
-func (a *App) toggleMaximize() {
-	if isZoomed(a.hwnd) {
-		pShowWindow.Call(a.hwnd, swRestore)
+func (w *Window) toggleMaximize() {
+	if isZoomed(w.hwnd) {
+		pShowWindow.Call(w.hwnd, swRestore)
 	} else {
-		pShowWindow.Call(a.hwnd, swShowMaximized)
+		pShowWindow.Call(w.hwnd, swShowMaximized)
 	}
 }
 
-func (a *App) showSystemMenu() {
-	menu, _, _ := pGetSystemMenu.Call(a.hwnd, 0)
+func (w *Window) showSystemMenu() {
+	menu, _, _ := pGetSystemMenu.Call(w.hwnd, 0)
 	if menu == 0 {
 		return
 	}
 	const mfByCommand, mfEnabled, mfGrayed = 0, 0, 1
-	zoomed := isZoomed(a.hwnd)
+	zoomed := isZoomed(w.hwnd)
 	set := func(cmd uintptr, on bool) {
 		f := uintptr(mfByCommand | mfGrayed)
 		if on {
@@ -330,9 +588,8 @@ func (a *App) showSystemMenu() {
 	var pt point
 	pGetCursorPos.Call(ptr(&pt))
 	const tpmReturnCmd, tpmRightButton = 0x0100, 0x0002
-	cmd, _, _ := pTrackPopupMenu.Call(menu, tpmReturnCmd|tpmRightButton, uintptr(pt.X), uintptr(pt.Y), 0, a.hwnd, 0)
+	cmd, _, _ := pTrackPopupMenu.Call(menu, tpmReturnCmd|tpmRightButton, uintptr(pt.X), uintptr(pt.Y), 0, w.hwnd, 0)
 	if cmd != 0 {
-		pPostMessageW.Call(a.hwnd, wmSysCommand, cmd, 0)
+		pPostMessageW.Call(w.hwnd, wmSysCommand, cmd, 0)
 	}
 }
-
