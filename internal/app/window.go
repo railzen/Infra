@@ -155,6 +155,7 @@ func (w *Window) hookSite() {
 	wv.on(vt.AddSourceChanged, func(_, _ uintptr) {
 		if w.cur != nil {
 			w.cur.URL = wv.Source()
+			w.push() // the address field in the links dropdown shows it
 		}
 	})
 	wv.on(vt.AddNavigationStarting, func(_, _ uintptr) {

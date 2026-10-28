@@ -106,3 +106,21 @@ func TestRemoveBookmark(t *testing.T) {
 		t.Fatalf("after remove: %+v", a.cfg)
 	}
 }
+
+func TestAddressURL(t *testing.T) {
+	ok := map[string]string{
+		"https://oa.corp/a?b=1": "https://oa.corp/a?b=1",
+		"oa.corp/path":          "https://oa.corp/path",
+		"  HTTP://x.local  ":    "http://x.local",
+	}
+	for in, want := range ok {
+		if got, good := addressURL(in); !good || got != want {
+			t.Errorf("addressURL(%q) = %q %v, want %q", in, got, good, want)
+		}
+	}
+	for _, in := range []string{"", "ftp://x", "javascript:alert(1)", "file:///C:/x", "https://"} {
+		if got, good := addressURL(in); good {
+			t.Errorf("addressURL(%q) accepted as %q", in, got)
+		}
+	}
+}

@@ -216,6 +216,12 @@ select.input option { background: var(--elevated); color: var(--fg); }
 /* ---------- dropdown (popup window) ---------- */
 body.menu { background: var(--elevated); overflow-y: auto; }
 body.menu .toast { bottom: 12px; font-size: 12px; padding: 6px 12px; }
+.addr { display: flex; align-items: center; gap: 4px; padding: 2px 2px 0 2px; }
+.addr-input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; outline: none; user-select: text;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--secondary); font-size: 12.5px;
+}
+.addr-input:focus { border-color: color-mix(in srgb, var(--fg) 30%, transparent); background: var(--bg); color: var(--fg); }
 .ctx {
   position: fixed; z-index: 50; min-width: 156px; padding: 4px;
   background: var(--elevated); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: var(--shadow);
@@ -289,6 +295,7 @@ const I = {
   up: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>',
   down: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>',
   plus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
+  copy: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg>',
   list: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
   globe: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>',
   shield: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l5 2v4c0 3-2.2 5.3-5 6.4-2.8-1.1-5-3.4-5-6.4v-4z"/></svg>',
@@ -638,6 +645,7 @@ let menuHTML = "";        // last rendered dropdown markup
 let menuKindShown = "";
 let ctxMenu = null;       // right-click menu on a link: { id, x, y }
 let delConfirm = null;    // id of the link awaiting delete confirmation
+let addrEditing = false;  // the user is typing in the address field
 
 function ctxMenuHTML() {
   if (!ctxMenu) return "";
@@ -664,6 +672,12 @@ const PANELS = {
         </div>
       </div>`;
     return `
+      ${S.current ? `
+        <div class="addr">
+          <input class="addr-input" id="addr" value="${esc(S.current.url || S.current.name)}" spellcheck="false" autocomplete="off" title="输入地址后按回车在当前窗口打开">
+          <button class="tool" id="addr-copy" title="复制地址">${I.copy}</button>
+        </div>
+        <div class="dd-sep"></div>` : ""}
       ${bs.length ? `<div class="dd-label">收藏夹</div>` + bs.map((b, i) => `
         <div class="dd-item${i === kbIndex ? " kb" : ""}" data-open="${esc(b.id)}" data-i="${i}" role="menuitem">
           ${avatar(b, "sm")}
@@ -747,6 +761,19 @@ const PANEL_BIND = {
     });
     $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
     $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
+    const addr = $("#addr");
+    if (addr) {
+      addr.onfocus = () => addr.select();
+      addr.oninput = () => (addrEditing = true);
+      addr.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); addrEditing = false; send({ t: "navigate", url: addr.value }); }
+      };
+      $("#addr-copy").onclick = () => {
+        addr.focus(); addr.select();
+        const ok = document.execCommand("copy");
+        toast(ok ? "已复制地址" : "复制失败", ok ? "ok" : "err");
+      };
+    }
     const ctx = $("#ctx");
     if (ctx) {
       // keep the menu inside the dropdown window
@@ -784,13 +811,15 @@ const PANEL_BIND = {
   about() {},
 };
 
-function renderMenu() {
+function renderMenu(force) {
   document.body.classList.add("menu");
   const kind = PANELS[S.menuKind] ? S.menuKind : "links";
   if (kind !== menuKindShown) { confirmDel = null; ctxMenu = null; delConfirm = null; menuKindShown = kind; }
   const html = `<div class="dd dd-${kind}" id="dd">${PANELS[kind]()}</div>` + (kind === "links" && !delConfirm ? ctxMenuHTML() : "");
   // re-rendering would close an open <select>; skip pushes that change nothing
   if (html === menuHTML) return;
+  // background pushes (page title, loading…) must not wipe a half-typed address
+  if (addrEditing && !force && document.activeElement?.id === "addr") return;
   menuHTML = html;
   $("#root").innerHTML = html;
   PANEL_BIND[kind]();
@@ -812,6 +841,8 @@ function setupMenu() {
     if (ctxMenu && !e.target.closest("#ctx")) { ctxMenu = null; renderMenu(); }
   }, true);
   document.addEventListener("keydown", (e) => {
+    // typing in the address field: leave arrows and Enter to the input
+    if (e.target.closest?.("input,select") && e.key !== "Escape") return;
     const n = S.menuKind === "links" && !delConfirm ? S.bookmarks.length : 0;
     if (e.key === "Escape" && ctxMenu) { ctxMenu = null; renderMenu(); }
     else if (e.key === "Escape" && delConfirm) { delConfirm = null; renderMenu(); }
@@ -826,7 +857,7 @@ function setupMenu() {
 
 function render() {
   if (MODE !== "menu") { renderMain(); return; }
-  if (!S.menuOpen) { kbIndex = -1; ctxMenu = null; delConfirm = null; }
+  if (!S.menuOpen) { kbIndex = -1; ctxMenu = null; delConfirm = null; addrEditing = false; }
   renderMenu();
 }
 

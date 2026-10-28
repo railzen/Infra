@@ -35,6 +35,7 @@ type inMsg struct {
 	RememberWindow bool             `json:"rememberWindow"`
 	Name           string           `json:"name"`
 	Data           string           `json:"data"`
+	URL            string           `json:"url"`
 }
 
 // onMessage handles a message from this window's UI view or dropdown.
@@ -91,20 +92,39 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		w.showPage(m.Page, m.Arg)
 	case "open":
 		w.menu.hide()
-		switch m.Where {
-		case "current":
-			a.openHere(w, m.ID)
-		case "new":
-			a.openNew(w, m.ID)
-		default:
-			a.open(w, m.ID)
-		}
+		// opening may move and resize this window; do it after the webview
+		// callback that delivered the message has returned, not inside it
+		id, where := m.ID, m.Where
+		a.post(func() {
+			if w.closing {
+				return
+			}
+			switch where {
+			case "current":
+				a.openHere(w, id)
+			case "new":
+				a.openNew(w, id)
+			default:
+				a.open(w, id)
+			}
+		})
 	case "deleteLink":
 		// from the dropdown: it stays open, so the main window keeps its page
 		if a.removeBookmark(m.ID) {
 			w.toast("已删除", "ok")
 		}
 		a.pushAll()
+	case "navigate":
+		// typed into the address field of the links dropdown
+		w.menu.hide()
+		if w.cur != nil {
+			if u, ok := addressURL(m.URL); ok {
+				w.showPage("", "")
+				w.site.Navigate(u)
+			} else {
+				w.toast("只支持 http 和 https 地址", "err")
+			}
+		}
 	case "nav":
 		if w.cur == nil || w.siteWV == 0 {
 			return
@@ -463,4 +483,23 @@ func (a *App) deleteCA(w *Window, id string) {
 	a.save()
 	a.pushAll()
 	w.toast("已删除证书", "ok")
+}
+
+// addressURL turns what was typed into the address field into an http(s)
+// URL; a bare host such as "oa.corp/path" gets https://.
+func addressURL(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", false
+	}
+	if i := strings.Index(s, "://"); i >= 0 {
+		if sch := strings.ToLower(s[:i]); sch != "http" && sch != "https" {
+			return "", false
+		}
+	}
+	u, err := url.Parse(normalizeURL(s))
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	return u.String(), true
 }

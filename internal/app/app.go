@@ -289,7 +289,12 @@ func (a *App) openHere(w *Window, id string) {
 		return
 	}
 	w.rememberPlacement()
-	w.applyPlacement(b.Window)
+	if w.applyPlacement(b.Window) {
+		// make sure both webviews and WebView2's idea of the window position
+		// match the new placement
+		w.layout()
+		w.notifyMoved()
+	}
 	w.openBookmark(id)
 }
 
