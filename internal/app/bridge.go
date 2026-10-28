@@ -199,7 +199,7 @@ func (a *App) exportConfig(w *Window) {
 		w.toast("导出失败："+err.Error(), "err")
 		return
 	}
-	path := fileDialog(w.dialogOwner(), true, "导出 Intra 配置", "Intra-配置-"+time.Now().Format("20060102")+".json")
+	path := fileDialog(w.dialogOwner(), true, "导出 Intra 配置", "Intra-config-"+time.Now().Format("20060102")+".json")
 	if path == "" || w.closing {
 		return
 	}
