@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: intra-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          fetch-depth: 0
+
+      - name: Choose version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            $versions = @(git tag --list | Where-Object { $_ -cmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' } | ForEach-Object { [version]$_.Substring(1) } | Sort-Object -Descending)
+            if ($versions.Count -eq 0) {
+              throw 'Create the initial v1.0.0 tag before using manual releases.'
+            }
+            $latest = $versions[0]
+            $tag = 'v{0}.{1}.{2}' -f $latest.Major, $latest.Minor, ($latest.Build + 1)
+          } else {
+            $tag = $env:GITHUB_REF_NAME
+          }
+          if ($tag -cnotmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
+            throw "Invalid release tag: $tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "number=$($tag.Substring(1))" >> $env:GITHUB_OUTPUT
+          "## Release $tag" >> $env:GITHUB_STEP_SUMMARY
+          "Source: $(git rev-parse HEAD)" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/genicon/go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/genicon/go.sum
+
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 -Version '${{ steps.version.outputs.number }}'
+
+      - name: Publish release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { execFileSync } = require('child_process');
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (context.eventName === 'workflow_dispatch') {
+              await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${tag}`, sha });
+            }
+            // Keep an existing release intact; retrying a failed upload can add
+            // a missing asset without replacing a published executable.
+            let release;
+            try {
+              ({ data: release } = await github.rest.repos.getReleaseByTag({ owner, repo, tag }));
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              ({ data: release } = await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: sha,
+                name: tag, generate_release_notes: true, make_latest: 'true'
+              }));
+            }
+            if (!release.assets.some(asset => asset.name === 'Intra.exe')) {
+              const data = fs.readFileSync('release/Intra.exe');
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name: 'Intra.exe', data,
+                headers: { 'content-type': 'application/vnd.microsoft.portable-executable', 'content-length': data.length }
+              });
+            }
+            await core.summary.addLink('Download release', release.html_url).write();
