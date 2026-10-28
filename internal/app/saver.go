@@ -6,9 +6,8 @@ import (
 	"intra/internal/config"
 )
 
-// saver writes configuration snapshots in the background. Rewriting the exe
-// takes tens of milliseconds, so it must not run on the UI thread. Only the
-// newest pending snapshot is written.
+// saver writes configuration snapshots in the background so disk I/O never
+// blocks the UI thread. Only the newest pending snapshot is written.
 type saver struct {
 	store   *config.Store
 	onError func(error)

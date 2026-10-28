@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,9 +29,7 @@ func testCA(t *testing.T, cn string) *x509.Certificate {
 }
 
 func TestExportImportMerge(t *testing.T) {
-	exe := filepath.Join(t.TempDir(), "Intra.exe")
-	os.WriteFile(exe, []byte("MZ"), 0o755)
-	store := config.NewStore(exe)
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
 	defer netx.SetRecords(nil)
 	defer netx.SetExtraRoots(nil)
 

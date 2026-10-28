@@ -272,6 +272,9 @@ func (w *Window) rememberPlacement() {
 		return
 	}
 	n := wp.NormalPosition
+	if n.W() <= 0 || n.H() <= 0 {
+		return // never overwrite a good placement with an empty one
+	}
 	ws := &config.WindowState{X: int(n.Left), Y: int(n.Top), W: int(n.W()), H: int(n.H()),
 		Maximized: wp.ShowCmd == swShowMaximized || (wp.ShowCmd == swShowMinimized && wp.Flags&2 != 0)}
 	if w.cur != nil {

@@ -4,7 +4,7 @@
 
 - **收藏夹**：每个网站可自定义名称、网址和 DNS 记录（A / CNAME，支持 `*.example.local` 通配符）。打开网站时，该网站自己的记录优先，其次是其他收藏的记录，最后才是系统 DNS。
 - **证书信任**：不使用 Windows 系统证书库。HTTPS 只信任内置的 Mozilla 公共根证书（`internal/netx/cacert.pem`，来自 curl.se），以及在「设置 → 证书」中手动添加的 CA（可删除）。
-- **单文件**：所有配置以 gzip JSON 的形式附加在 `Intra.exe` 末尾，复制 exe 即可带走全部设置。每个 exe 副本有自己的配置、浏览器数据目录（`%LOCALAPPDATA%\Intra\<路径哈希>`）和单实例锁。
+- **配置**：保存在 `%APPDATA%\IntraWebApps\config.json`，浏览器数据（Cookie、登录状态）在 `%LOCALAPPDATA%\IntraWebApps`。exe 本身不会被修改；同一用户同时只运行一个 Intra。可在「设置 → 配置」中以 JSON 导入或导出。
 
 ## 工作原理
 

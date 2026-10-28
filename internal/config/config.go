@@ -1,27 +1,19 @@
-// Package config keeps Intra's settings appended to the end of its own .exe,
-// so copying the executable also copies bookmarks, CAs and preferences.
-//
-// Layout of the executable on disk:
-//
-//	[original PE image][gzip(JSON)][8 byte little-endian payload length][8 byte magic]
-//
-// Windows ignores trailing data after the PE image, so the program still runs.
+// Package config stores Intra's settings as JSON in
+// %APPDATA%\IntraWebApps\config.json.
 package config
 
 import (
-	"bytes"
-	"compress/gzip"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
-const magic = "INTRACF1"
+// AppDirName is the per-user folder name under %APPDATA% and %LOCALAPPDATA%.
+const AppDirName = "IntraWebApps"
 
 type DNSRecord struct {
 	Host  string `json:"host"`
@@ -82,37 +74,27 @@ func (c *Config) Bookmark(id string) *Bookmark {
 	return nil
 }
 
-// Store reads and writes the configuration trailer of one executable file.
+// DefaultPath is %APPDATA%\IntraWebApps\config.json.
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, AppDirName, "config.json"), nil
+}
+
+// Store reads and writes one JSON configuration file.
 type Store struct {
 	mu   sync.Mutex
 	path string
 }
 
-func NewStore(exePath string) *Store {
-	s := &Store{path: exePath}
-	// left over from a previous save while that process was running
-	os.Remove(s.OldPath())
-	return s
-}
+func NewStore(path string) *Store { return &Store{path: path} }
 
 func (s *Store) Path() string { return s.path }
 
-// OldPath is where Save moves the running executable when it cannot be overwritten.
-func (s *Store) OldPath() string { return s.path + ".old" }
-
-// split returns the PE image and the payload (nil if none).
-func split(data []byte) (image, payload []byte) {
-	if len(data) < 16 || string(data[len(data)-8:]) != magic {
-		return data, nil
-	}
-	n := binary.LittleEndian.Uint64(data[len(data)-16 : len(data)-8])
-	if n > uint64(len(data)-16) {
-		return data, nil
-	}
-	end := len(data) - 16
-	return data[:end-int(n)], data[end-int(n) : end]
-}
-
+// Load reads the configuration. A missing file yields an error matching
+// os.ErrNotExist; an unreadable one is moved aside (see Quarantine).
 func (s *Store) Load() (*Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,72 +102,58 @@ func (s *Store) Load() (*Config, error) {
 	if err != nil {
 		return Default(), err
 	}
-	_, payload := split(data)
-	if payload == nil {
-		return Default(), nil
-	}
-	zr, err := gzip.NewReader(bytes.NewReader(payload))
-	if err != nil {
-		return Default(), err
-	}
-	raw, err := io.ReadAll(zr)
-	if err != nil {
-		return Default(), err
-	}
 	c := Default()
-	if err := json.Unmarshal(raw, c); err != nil {
-		return Default(), err
+	if err := json.Unmarshal(trimBOM(data), c); err != nil {
+		return Default(), &CorruptError{Path: s.path, Err: err}
 	}
 	return c, nil
 }
 
-// Save rewrites the executable with a new trailer. A running .exe cannot be
-// overwritten on Windows but it can be renamed, so when the target is locked
-// the current file is moved aside to "<exe>.old" (removed on next start).
+// CorruptError reports a configuration file that is not valid JSON.
+type CorruptError struct {
+	Path string
+	Err  error
+}
+
+func (e *CorruptError) Error() string { return fmt.Sprintf("配置文件 %s 已损坏: %v", e.Path, e.Err) }
+func (e *CorruptError) Unwrap() error { return e.Err }
+
+// Quarantine renames an unreadable configuration file so a fresh one can be
+// written without destroying it, and returns the backup path.
+func (s *Store) Quarantine() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	backup := s.path + "." + time.Now().Format("20060102-150405") + ".bad"
+	return backup, os.Rename(s.path, backup)
+}
+
+// Save writes the configuration atomically: a temporary file in the same
+// folder replaces config.json, so a crash never leaves a half-written file.
 func (s *Store) Save(c *Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	data, err := os.ReadFile(s.path)
+	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	image, _ := split(data)
-
-	raw, err := json.Marshal(c)
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("无法创建 %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, "config-*.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("无法写入 %s: %w", dir, err)
 	}
-	var buf bytes.Buffer
-	buf.Grow(len(image) + len(raw) + 64)
-	buf.Write(image)
-	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	start := buf.Len()
-	zw.Write(raw)
-	zw.Close()
-	var tail [16]byte
-	binary.LittleEndian.PutUint64(tail[:8], uint64(buf.Len()-start))
-	copy(tail[8:], magic)
-	buf.Write(tail[:])
-
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o755); err != nil {
-		return fmt.Errorf("无法写入 %s: %w", filepath.Dir(s.path), err)
+	_, werr := tmp.Write(raw)
+	serr := tmp.Sync()
+	cerr := tmp.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("无法写入配置: %w", err)
 	}
-	if err := os.Rename(tmp, s.path); err == nil {
-		return nil
-	}
-	old := s.OldPath()
-	os.Remove(old)
-	if err := os.Rename(s.path, old); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("无法替换程序文件: %w", err)
-	}
-	hideFile(old)
-	if err := os.Rename(tmp, s.path); err != nil {
-		// put the original back so the user is never left without an exe
-		os.Rename(old, s.path)
-		os.Remove(tmp)
-		return errors.Join(errors.New("无法写入配置"), err)
+	if err := os.Rename(tmp.Name(), s.path); err != nil {
+		os.Remove(tmp.Name())
+		return fmt.Errorf("无法写入配置: %w", err)
 	}
 	return nil
 }

@@ -1,9 +1,8 @@
 package app
 
 import (
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -37,8 +36,6 @@ type siteState struct {
 // App holds what all windows share: configuration, the proxy and saving.
 type App struct {
 	version    string
-	exe        string
-	key        string
 	store      *config.Store
 	cfg        *config.Config
 	proxy      *netx.Proxy
@@ -59,9 +56,6 @@ var theApp *App // window procedures need a way back to the App
 
 // Run starts Intra and blocks until the last window is closed.
 func Run(version string) {
-	if runCleanupHelper(os.Args) {
-		return
-	}
 	a := &App{version: version}
 	theApp = a
 	// Per-monitor v2 DPI awareness (also declared in the manifest); without it
@@ -74,20 +68,9 @@ func Run(version string) {
 			log.SetOutput(f)
 		}
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		messageBox(0, "无法定位程序文件："+err.Error(), "Intra", 0x10)
-		return
-	}
-	if p, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = p
-	}
-	a.exe = exe
-	sum := sha256.Sum256([]byte(strings.ToLower(exe)))
-	a.key = hex.EncodeToString(sum[:])[:10]
 
-	// One instance per executable copy: each copy has its own config and browser profile.
-	mutex, err := windows.CreateMutex(nil, false, u16(`Local\Intra-`+a.key))
+	// All copies share one config file, so only one Intra runs per user session.
+	mutex, err := windows.CreateMutex(nil, false, u16(`Local\`+config.AppDirName))
 	if err == windows.ERROR_ALREADY_EXISTS {
 		activateExisting(a.className())
 		return
@@ -103,9 +86,24 @@ func Run(version string) {
 	}
 	a.wv2Version = ver
 
-	a.store = config.NewStore(exe)
-	a.cfg, err = a.store.Load()
+	path, err := config.DefaultPath()
 	if err != nil {
+		messageBox(0, "无法定位配置文件夹："+err.Error(), "Intra", 0x10)
+		return
+	}
+	a.store = config.NewStore(path)
+	a.cfg, err = a.store.Load()
+	var corrupt *config.CorruptError
+	switch {
+	case errors.As(err, &corrupt):
+		// keep the unreadable file for the user instead of overwriting it
+		backup, qerr := a.store.Quarantine()
+		msg := "配置文件无法读取，已使用空白配置启动。\n\n" + err.Error()
+		if qerr == nil {
+			msg += "\n\n原文件已保留为：\n" + backup
+		}
+		messageBox(0, msg, "Intra", 0x30)
+	case err != nil && !errors.Is(err, os.ErrNotExist):
 		log.Printf("load config: %v", err)
 	}
 	a.saver = newSaver(a.store, func(err error) {
@@ -127,7 +125,7 @@ func Run(version string) {
 	if local == "" {
 		local = os.TempDir()
 	}
-	a.dataDir = filepath.Join(local, "Intra", a.key)
+	a.dataDir = filepath.Join(local, config.AppDirName)
 	os.MkdirAll(a.dataDir, 0o755)
 	a.args = []string{
 		"--proxy-server=http://" + a.proxy.Addr(),
@@ -165,10 +163,9 @@ func Run(version string) {
 		pTranslateMessage.Call(ptr(&m))
 		pDispatchMessageW.Call(ptr(&m))
 	}
-	a.spawnCleanup()
 }
 
-func (a *App) className() string { return "IntraWindow-" + a.key }
+func (a *App) className() string { return config.AppDirName + "-Window" }
 
 func activateExisting(class string) {
 	h, _, _ := pFindWindowW.Call(ptr(u16(class)), 0)
@@ -409,7 +406,7 @@ type stateMsg struct {
 		Version    string `json:"version"`
 		RootCount  int    `json:"rootCount"`
 		BundleDate string `json:"bundleDate"`
-		ExePath    string `json:"exePath"`
+		ConfigPath string `json:"configPath"`
 		WebView2   string `json:"webview2"`
 	} `json:"info"`
 }
@@ -433,7 +430,7 @@ func (a *App) baseState() *stateMsg {
 	s.Info.Version = a.version
 	s.Info.RootCount = netx.BuiltinRootCount()
 	s.Info.BundleDate = netx.BundleDate()
-	s.Info.ExePath = a.exe
+	s.Info.ConfigPath = a.store.Path()
 	s.Info.WebView2 = a.wv2Version
 	return s
 }
