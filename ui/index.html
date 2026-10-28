@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Intra</title>
+<style>
+/* Title bar metrics and colors follow the Codex desktop app (ApplicationMenuTopBar
+   + Electron titleBarOverlay): 36px bar, 14px menu labels, rounded-md buttons. */
+:root {
+  --bar-h: 36px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --text-xs: 11px; --text-sm: 12px; --text-base: 14px;
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px; --radius-xl: 14px;
+
+  --bg: #ffffff;
+  --surface-2: #f9f9f9;
+  --elevated: #ffffff;
+  --fg: #1a1c1f;
+  --secondary: #5d5d5d;
+  --tertiary: #8f8f8f;
+  --border: #0000001a;
+  --border-strong: #00000026;
+  --hover: color-mix(in srgb, var(--fg) 5%, transparent);
+  --selection: color-mix(in oklab, #000 8%, transparent);
+  --symbol: #1f1f1f;
+  --caption-hover: color-mix(in srgb, var(--symbol) 10%, transparent);
+  --caption-press: color-mix(in srgb, var(--symbol) 20%, transparent);
+  --danger: #e02e2a;
+  --ok: #008635;
+  --accent: #2f6bff;
+  --shadow: 0 4px 8px -2px #0000001a, 0 12px 32px -8px #0000001f;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181818;
+    --surface-2: #1c1c1c;
+    --elevated: #212121;
+    --fg: #dfdfdf;
+    --secondary: #cdcdcd;
+    --tertiary: #afafaf;
+    --border: #ffffff26;
+    --border-strong: #ffffff33;
+    --selection: color-mix(in oklab, #fff 12%, transparent);
+    --symbol: #ffffff;
+    --danger: #ff6764;
+    --ok: #40c977;
+    --accent: #6b97ff;
+    --shadow: 0 4px 8px -2px #00000066, 0 12px 32px -8px #00000080;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: var(--font); font-size: var(--text-base); line-height: 1.5;
+  -webkit-font-smoothing: antialiased; overflow: hidden;
+  user-select: none; cursor: default;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
+input, select, textarea { font: inherit; color: inherit; }
+svg { display: block; flex: none; }
+
+/* ---------- title bar ---------- */
+.bar {
+  position: fixed; inset: 0 0 auto 0; height: var(--bar-h); z-index: 40;
+  display: flex; align-items: center; background: var(--bg);
+}
+.bar .menus { display: flex; align-items: center; gap: 2px; padding-inline: 4px 8px; height: 100%; }
+.menu-btn {
+  border-radius: var(--radius-md); border: 1px solid transparent;
+  padding: 5px 9px; font-size: 13px; font-weight: 400; line-height: 1;
+  color: var(--tertiary); outline: none;
+}
+.menu-btn:hover, .menu-btn:focus-visible { background: var(--hover); color: var(--secondary); }
+.menu-btn.sel { background: var(--selection); color: var(--fg); }
+.navs { display: flex; align-items: center; gap: 2px; padding-left: 4px; }
+.navs + .menus { padding-left: 2px; }
+.icon-btn {
+  width: 28px; height: 28px; border-radius: var(--radius-md);
+  display: grid; place-items: center; color: var(--tertiary);
+}
+.icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--secondary); }
+.icon-btn:disabled { opacity: .35; }
+.drag { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; min-width: 40px; overflow: hidden; }
+.title {
+  font-size: var(--text-sm); color: var(--tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 60%; display: flex; align-items: center; gap: 6px; pointer-events: none;
+}
+.title .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--tertiary); border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Electron/Windows caption buttons: 46px wide, 10px line glyphs, red close */
+.caption { display: flex; height: 100%; }
+.cap {
+  width: 46px; height: 100%; display: grid; place-items: center; color: var(--symbol);
+  transition: background-color .1s linear;
+}
+.cap:hover { background: var(--caption-hover); }
+.cap:active { background: var(--caption-press); }
+.cap.close:hover { background: #e81123; color: #fff; }
+.cap.close:active { background: #f1707a; color: #fff; }
+body.inactive .cap:not(:hover) svg { opacity: .4; }
+.resize-top { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 60; cursor: ns-resize; }
+.resize-top .tl, .resize-top .tr { position: absolute; top: 0; width: 10px; height: 6px; }
+.resize-top .tl { left: 0; cursor: nwse-resize; } .resize-top .tr { right: 0; cursor: nesw-resize; }
+body.maximized .resize-top { display: none; }
+
+/* ---------- pages ---------- */
+.page {
+  position: fixed; inset: var(--bar-h) 0 0 0; overflow: auto; background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+.page-inner { max-width: 720px; margin: 0 auto; padding: 36px 32px 64px; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+.page-head h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -.01em; flex: 1; }
+.back {
+  height: 28px; padding: 0 10px 0 6px; border-radius: var(--radius-md); color: var(--secondary);
+  display: inline-flex; align-items: center; gap: 4px; font-size: 13px;
+}
+.back:hover { background: var(--hover); color: var(--fg); }
+.section { margin-bottom: 28px; }
+.section > h2 { font-size: 13px; font-weight: 600; color: var(--secondary); margin: 0 0 10px 2px; }
+.section > p.hint { font-size: 13px; color: var(--tertiary); margin: -4px 0 12px 2px; }
+.card { border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--elevated); overflow: hidden; }
+.row { display: flex; align-items: center; gap: 14px; padding: 14px 16px; min-height: 56px; }
+.row + .row { border-top: 1px solid var(--border); }
+.row .grow { flex: 1; min-width: 0; }
+.row .label { font-size: 14px; }
+.row .desc { font-size: 12.5px; color: var(--tertiary); margin-top: 1px; }
+.trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.empty-row { padding: 22px 16px; text-align: center; color: var(--tertiary); font-size: 13px; }
+
+.btn {
+  height: 32px; padding: 0 14px; border-radius: 9999px; font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  border: 1px solid var(--border); background: transparent; color: var(--fg);
+}
+.btn:hover:not(:disabled) { background: var(--hover); }
+.btn.primary { background: var(--fg); color: var(--bg); border-color: transparent; }
+.btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 85%, var(--bg)); }
+.btn.danger { color: var(--danger); }
+.btn.danger.confirm { background: var(--danger); color: #fff; border-color: transparent; }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.btn:disabled { opacity: .5; }
+.tool { width: 28px; height: 28px; border-radius: var(--radius-md); display: grid; place-items: center; color: var(--tertiary); }
+.tool:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.tool.danger:hover { color: var(--danger); }
+.tool:disabled { opacity: .3; }
+
+.switch { width: 36px; height: 20px; border-radius: 9999px; background: var(--border-strong); position: relative; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s; }
+.switch[aria-checked="true"] { background: var(--fg); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); background: var(--bg); }
+
+.field { display: block; margin-bottom: 16px; }
+.field > span { display: block; font-size: 13px; color: var(--secondary); margin: 0 0 6px 2px; }
+.input, select.input {
+  width: 100%; height: 34px; padding: 0 12px; border-radius: var(--radius-lg);
+  border: 1px solid var(--border); background: var(--bg); outline: none; user-select: text;
+}
+select.input { padding-right: 28px; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%238f8f8f' stroke-width='1.5'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 11px center; }
+select.input option { background: var(--elevated); color: var(--fg); }
+.input:focus { border-color: color-mix(in srgb, var(--fg) 35%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg) 7%, transparent); }
+.input.bad { border-color: var(--danger); }
+.err { color: var(--danger); font-size: 12px; margin: 4px 0 0 2px; min-height: 0; }
+.rec-head, .rec { display: grid; grid-template-columns: 1.3fr 96px 1fr 28px; gap: 8px; align-items: center; }
+.rec-head { font-size: 12px; color: var(--tertiary); padding: 0 2px 6px; }
+.rec { margin-bottom: 8px; }
+.rec .input { height: 32px; font-size: 13px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 9999px;
+  border: 1px dashed var(--border-strong); color: var(--secondary); font-size: 12.5px;
+}
+.chip:hover { background: var(--hover); color: var(--fg); }
+.actions { display: flex; gap: 8px; align-items: center; margin-top: 28px; }
+.actions .sp { flex: 1; }
+.badge { font-size: 11px; color: var(--tertiary); border: 1px solid var(--border); border-radius: 9999px; padding: 0 7px; line-height: 18px; white-space: nowrap; }
+
+.avatar {
+  width: 32px; height: 32px; border-radius: 9px; flex: none; display: grid; place-items: center;
+  font-size: 14px; font-weight: 600; color: #fff;
+}
+.avatar.sm { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
+.avatar.lg { width: 40px; height: 40px; border-radius: 11px; font-size: 17px; }
+
+/* home */
+.hero { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+.hero > svg { width: 44px; height: 44px; }
+.hero h1 { font-size: 22px; margin: 0; font-weight: 600; letter-spacing: -.01em; }
+.hero p { margin: 0; color: var(--tertiary); font-size: 13px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.tile {
+  text-align: left; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--elevated);
+  padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 112px; position: relative;
+  transition: border-color .12s, transform .12s;
+}
+.tile:hover { border-color: var(--border-strong); background: color-mix(in srgb, var(--elevated) 94%, var(--fg)); }
+.tile .name { font-size: 14px; font-weight: 500; }
+.tile .host { font-size: 12px; color: var(--tertiary); }
+.tile .edit { position: absolute; top: 10px; right: 10px; opacity: 0; }
+.tile:hover .edit { opacity: 1; }
+.tile.add { border-style: dashed; align-items: center; justify-content: center; color: var(--tertiary); gap: 6px; flex-direction: row; }
+.tile.add:hover { color: var(--fg); }
+.empty { text-align: center; padding: 72px 0 40px; }
+.empty .art { width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 18px; border: 1px solid var(--border); display: grid; place-items: center; color: var(--tertiary); }
+.empty h2 { font-size: 17px; font-weight: 600; margin: 0 0 6px; }
+.empty p { color: var(--tertiary); font-size: 13px; margin: 0 auto 22px; max-width: 380px; }
+
+/* about */
+.about { text-align: center; padding-top: 40px; }
+.about .mark { width: 88px; height: 88px; margin: 0 auto 18px; filter: drop-shadow(0 10px 24px #2f6bff40); }
+.about h1 { font-size: 26px; margin: 0; font-weight: 600; letter-spacing: -.02em; }
+.about .ver { color: var(--tertiary); font-size: 13px; margin: 4px 0 18px; }
+.about .lead { color: var(--secondary); max-width: 460px; margin: 0 auto 28px; font-size: 14px; }
+.kv { text-align: left; }
+.kv .row { min-height: 44px; padding: 10px 16px; }
+.kv .k { color: var(--tertiary); font-size: 13px; width: 120px; flex: none; }
+.kv .v { font-size: 13px; flex: 1; min-width: 0; user-select: text; }
+
+/* toast */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); opacity: 0; z-index: 100;
+  background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 9999px; font-size: 13px;
+  box-shadow: var(--shadow); transition: opacity .15s, transform .15s; pointer-events: none; max-width: 80vw;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.err { background: var(--danger); color: #fff; }
+
+/* ---------- dropdown (popup window) ---------- */
+body.menu { background: var(--elevated); }
+.dd { padding: 6px; }
+.dd-label { font-size: 12px; color: var(--tertiary); padding: 6px 8px 4px; }
+.dd-item {
+  width: 100%; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 6px 0 8px;
+  border-radius: 8px; text-align: left; font-size: 13px; outline: none;
+}
+.dd-item:hover, .dd-item.kb { background: var(--hover); }
+.dd-item .grow { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.dd-item .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 60%; }
+.dd-item .hs { color: var(--tertiary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dd-item .tool { width: 26px; height: 26px; opacity: 0; }
+.dd-item:hover .tool, .dd-item.kb .tool { opacity: 1; }
+.dd-item .cur { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); flex: none; }
+.dd-sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.dd-foot { display: flex; gap: 4px; }
+.dd-foot .dd-item { color: var(--secondary); }
+.dd-foot .dd-item:hover { color: var(--fg); }
+.dd-empty { padding: 18px 10px 14px; text-align: center; color: var(--tertiary); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+const MODE = window.__INTRA_MODE || "main";
+const send = (m) => window.chrome.webview.postMessage(JSON.stringify(m));
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const LOGO = `<svg viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3D7BFF"/><stop offset="1" stop-color="#7B3FF2"/></linearGradient></defs><rect x="8" y="8" width="240" height="240" rx="60" fill="url(#lg)"/><g fill="none" stroke="#fff" stroke-linecap="round"><path d="M154.2 63.1A70 70 0 0 1 154.2 192.9M101.8 192.9A70 70 0 0 1 101.8 63.1" stroke-width="16" stroke-opacity=".92"/><path d="M128 52V204" stroke-width="20"/></g></svg>`;
+
+const I = {
+  back: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>',
+  fwd: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
+  reload: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.5v3h-3"/></svg>',
+  stop: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
+  edit: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>',
+  trash: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4 4.5l.6 8.5h6.8l.6-8.5"/></svg>',
+  up: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>',
+  down: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>',
+  plus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
+  list: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
+  globe: '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg>',
+  shield: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l5 2v4c0 3-2.2 5.3-5 6.4-2.8-1.1-5-3.4-5-6.4v-4z"/></svg>',
+  min: '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5.5h10" stroke="currentColor" stroke-width="1"/></svg>',
+  max: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x=".5" y=".5" width="9" height="9" stroke="currentColor" stroke-width="1"/></svg>',
+  restore: '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x=".5" y="2.5" width="7" height="7"/><path d="M2.5 2.5V.5h7v7h-2"/></svg>',
+  close: '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M.5.5l9 9M9.5.5l-9 9" stroke="currentColor" stroke-width="1"/></svg>',
+};
+
+let S = { bookmarks: [], cas: [], settings: {}, info: {}, current: null, page: "", pageArg: "" };
+let pageKey = null;        // key of the page currently in the DOM
+let draft = null;          // bookmark being edited
+let draftErrors = {};
+let confirmDel = null;
+
+function hostOf(u) {
+  try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(u) ? u : "https://" + u).host; } catch { return u; }
+}
+function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; }
+function avatar(b, cls = "") {
+  const ch = ([...(b.name || hostOf(b.url) || "?").trim()][0] || "?").toUpperCase();
+  const h = hue(b.name + b.url);
+  return `<div class="avatar ${cls}" style="background:linear-gradient(135deg,hsl(${h} 70% 56%),hsl(${(h + 40) % 360} 68% 46%))">${esc(ch)}</div>`;
+}
+function toast(text, kind) {
+  const t = $("#toast");
+  t.textContent = text; t.className = "toast show" + (kind === "err" ? " err" : "");
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.className = "toast" + (kind === "err" ? " err" : "")), 2600);
+}
+
+window.intra = {
+  recv(m) {
+    if (m.t === "state") { S = m; render(); }
+    else if (m.t === "toast") toast(m.text, m.kind);
+  },
+};
+
+/* ======================= main window ======================= */
+function barHTML() {
+  return `
+  <div class="resize-top" data-resize="top"><div class="tl" data-resize="tl"></div><div class="tr" data-resize="tr"></div></div>
+  <div class="bar" id="bar">
+    <div class="navs" id="navs">
+      <button class="icon-btn" id="n-back" title="后退 (Alt+←)">${I.back}</button>
+      <button class="icon-btn" id="n-fwd" title="前进 (Alt+→)">${I.fwd}</button>
+      <button class="icon-btn" id="n-reload" title="刷新 (F5)">${I.reload}</button>
+    </div>
+    <div class="menus">
+      <button class="menu-btn" id="m-fav">链接</button>
+      <button class="menu-btn" id="m-set">设置</button>
+      <button class="menu-btn" id="m-about">关于</button>
+    </div>
+    <div class="drag" data-drag><div class="title" id="title"></div></div>
+    <div class="caption">
+      <button class="cap" id="c-min" title="最小化">${I.min}</button>
+      <button class="cap" id="c-max" title="最大化">${I.max}</button>
+      <button class="cap close" id="c-close" title="关闭">${I.close}</button>
+    </div>
+  </div>
+  <div id="page"></div>`;
+}
+
+function setupMain() {
+  $("#root").innerHTML = barHTML();
+  const bar = $("#bar");
+  bar.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || !e.target.closest("[data-drag]")) return;
+    if (e.detail === 2) { send({ t: "max" }); return; }
+    send({ t: "drag" });
+  });
+  bar.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    if (e.target.closest("[data-drag]")) send({ t: "sysmenu" });
+  });
+  document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
+  $(".resize-top").addEventListener("mousedown", (e) => {
+    if (e.button === 0) send({ t: "resize", edge: e.target.dataset.resize });
+  });
+  $("#m-fav").addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    send({ t: "menu", x: r.left, y: r.bottom });
+  });
+  $("#m-set").onclick = () => show(S.page === "settings" ? "" : "settings");
+  $("#m-about").onclick = () => show(S.page === "about" ? "" : "about");
+  $("#n-back").onclick = () => send({ t: "nav", action: "back" });
+  $("#n-fwd").onclick = () => send({ t: "nav", action: "forward" });
+  $("#n-reload").onclick = () => send({ t: "nav", action: S.current?.loading ? "stop" : "reload" });
+  $("#c-min").onclick = () => send({ t: "min" });
+  $("#c-max").onclick = () => send({ t: "max" });
+  $("#c-close").onclick = () => send({ t: "close" });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && S.page && S.current) { e.preventDefault(); show(""); }
+  });
+}
+
+function show(page, arg = "") { send({ t: "show", page, arg }); }
+
+const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹", edit: "编辑网站", settings: "设置", about: "关于 Intra" };
+
+function renderBar() {
+  document.body.classList.toggle("maximized", !!S.maximized);
+  document.body.classList.toggle("inactive", S.active === false);
+  $("#m-fav").classList.toggle("sel", !!S.menuOpen || ["home", "bookmarks", "edit"].includes(S.page));
+  $("#m-set").classList.toggle("sel", S.page === "settings");
+  $("#m-about").classList.toggle("sel", S.page === "about");
+  const c = S.current;
+  // always shown; disabled while no site is open or a page covers it
+  const onPage = !!S.page || !c;
+  $("#n-back").disabled = onPage || !c.canBack;
+  $("#n-fwd").disabled = onPage || !c.canFwd;
+  $("#n-reload").disabled = onPage;
+  const loading = !onPage && c.loading;
+  $("#n-reload").innerHTML = loading ? I.stop : I.reload;
+  $("#n-reload").title = loading ? "停止" : "刷新 (F5)";
+  $("#c-max").innerHTML = S.maximized ? I.restore : I.max;
+  $("#c-max").title = S.maximized ? "向下还原" : "最大化";
+  let title = "";
+  if (S.page && (S.page !== "home" || c)) title = esc(PAGE_NAMES[S.page] || "");
+  else if (c) title = (c.loading ? '<span class="spin"></span>' : "") + `<span class="trunc">${esc(c.title || c.name)}</span>`;
+  $("#title").innerHTML = title;
+}
+
+function renderMain(force) {
+  renderBar();
+  const key = S.page + ":" + S.pageArg;
+  const el = $("#page");
+  if (!S.page || !PAGES[S.page]) { el.innerHTML = ""; pageKey = null; return; }
+  const changed = pageKey !== key;
+  if (changed) { confirmDel = null; if (S.page === "edit") startDraft(S.pageArg); pageKey = key; }
+  // the edit form owns its inputs; never clobber them on background state pushes
+  if (S.page === "edit" && !changed && !force) return;
+  const scroll = changed ? 0 : ($("#scroller")?.scrollTop || 0);
+  el.innerHTML = `<div class="page" id="scroller"><div class="page-inner">${PAGES[S.page]()}</div></div>`;
+  $("#scroller").scrollTop = scroll;
+  BIND[S.page]?.();
+}
+
+function backBtn(to = "") {
+  if (!S.current && !to) return "";
+  return `<button class="back" data-go="${to}">${I.back}<span>${to === "bookmarks" ? "收藏夹" : "返回"}</span></button>`;
+}
+function bindCommon() {
+  document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => show(b.dataset.go, b.dataset.arg || "")));
+  document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = (e) => { if (!e.target.closest("[data-go]")) send({ t: "open", id: b.dataset.open }); }));
+}
+
+const PAGES = {
+  home() {
+    const bs = S.bookmarks;
+    if (!bs.length) return `
+      <div class="empty">
+        <div class="art">${I.globe}</div>
+        <h2>添加你的第一个网站</h2>
+        <p>Intra 把网站当作独立应用打开。你可以为每个网站自定义名称、网址和 DNS 记录（A / CNAME），访问内网服务无需修改 hosts。</p>
+        <button class="btn primary" data-go="edit" data-arg="">${I.plus}添加网站</button>
+      </div>`;
+    return `
+      <div class="hero">${LOGO}<div><h1>收藏夹</h1><p>${bs.length} 个网站 · 点击打开，悬停可编辑</p></div>
+        <span style="flex:1"></span><button class="btn sm" data-go="bookmarks">${I.list}管理</button></div>
+      <div class="grid">
+        ${bs.map((b) => `
+          <button class="tile" data-open="${esc(b.id)}">
+            ${avatar(b, "lg")}
+            <div><div class="name trunc">${esc(b.name)}</div><div class="host trunc">${esc(hostOf(b.url))}</div></div>
+            <span class="tool edit" data-go="edit" data-arg="${esc(b.id)}" title="编辑">${I.edit}</span>
+          </button>`).join("")}
+        <button class="tile add" data-go="edit" data-arg="">${I.plus}添加网站</button>
+      </div>`;
+  },
+
+  bookmarks() {
+    const bs = S.bookmarks;
+    return `
+      <div class="page-head">${backBtn("home")}<h1>管理收藏夹</h1>
+        <button class="btn primary sm" data-go="edit" data-arg="">${I.plus}添加网站</button></div>
+      <div class="card">
+        ${bs.length ? bs.map((b, i) => `
+          <div class="row">
+            ${avatar(b)}
+            <div class="grow"><div class="label trunc">${esc(b.name)}</div><div class="desc trunc">${esc(b.url)}</div></div>
+            ${b.records?.length ? `<span class="badge">${b.records.length} 条 DNS 记录</span>` : ""}
+            <button class="btn sm" data-open="${esc(b.id)}">打开</button>
+            <button class="tool" data-go="edit" data-arg="${esc(b.id)}" title="编辑">${I.edit}</button>
+            <button class="tool" data-move="${esc(b.id)}" data-dir="-1" ${i === 0 ? "disabled" : ""} title="上移">${I.up}</button>
+            <button class="tool" data-move="${esc(b.id)}" data-dir="1" ${i === bs.length - 1 ? "disabled" : ""} title="下移">${I.down}</button>
+          </div>`).join("") : `<div class="empty-row">还没有网站</div>`}
+      </div>`;
+  },
+
+  edit() {
+    const d = draft, e = draftErrors;
+    const host = hostOf(d.url || "");
+    const suggest = host && !d.records.some((r) => r.host.trim().toLowerCase() === host.split(":")[0].toLowerCase());
+    return `
+      <div class="page-head">${backBtn("bookmarks")}<h1>${d.id ? "编辑网站" : "添加网站"}</h1></div>
+      <div class="section">
+        <label class="field"><span>名称</span>
+          <input class="input ${e.name ? "bad" : ""}" id="f-name" value="${esc(d.name)}" placeholder="例如：办公系统" maxlength="60" spellcheck="false">
+          ${e.name ? `<div class="err">${esc(e.name)}</div>` : ""}</label>
+        <label class="field"><span>网址</span>
+          <input class="input ${e.url ? "bad" : ""}" id="f-url" value="${esc(d.url)}" placeholder="https://oa.example.local" spellcheck="false">
+          ${e.url ? `<div class="err">${esc(e.url)}</div>` : ""}</label>
+      </div>
+      <div class="section">
+        <h2>DNS 记录</h2>
+        <p class="hint">在 Intra 内访问这些主机名时使用下列记录，优先于系统 DNS。支持通配符，如 *.corp.local。</p>
+        <div id="recs">
+          ${d.records.length ? `<div class="rec-head"><span>主机名</span><span>类型</span><span>值</span><span></span></div>` : ""}
+          ${d.records.map((r, i) => `
+            <div class="rec" data-i="${i}">
+              <input class="input ${e["r" + i + "h"] ? "bad" : ""}" data-k="host" value="${esc(r.host)}" placeholder="oa.example.local" spellcheck="false">
+              <select class="input" data-k="type"><option ${r.type === "A" ? "selected" : ""}>A</option><option ${r.type === "CNAME" ? "selected" : ""}>CNAME</option></select>
+              <input class="input ${e["r" + i + "v"] ? "bad" : ""}" data-k="value" value="${esc(r.value)}" placeholder="${r.type === "CNAME" ? "目标主机名" : "IPv4 / IPv6 地址"}" spellcheck="false">
+              <button class="tool danger" data-delrec="${i}" title="删除记录">${I.trash}</button>
+            </div>
+            ${e["r" + i] ? `<div class="err" style="margin:-4px 0 8px">${esc(e["r" + i])}</div>` : ""}`).join("")}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <button class="chip" id="addrec">${I.plus}添加记录</button>
+          ${suggest ? `<button class="chip" id="sugrec">${I.plus}为 ${esc(host.split(":")[0])} 添加 A 记录</button>` : ""}
+        </div>
+      </div>
+      <div class="actions">
+        ${d.id ? `<button class="btn danger ${confirmDel === d.id ? "confirm" : ""}" id="del">${confirmDel === d.id ? "确认删除" : "删除"}</button>` : ""}
+        <span class="sp"></span>
+        <button class="btn" data-go="bookmarks">取消</button>
+        <button class="btn" id="save">保存</button>
+        <button class="btn primary" id="saveopen">保存并打开</button>
+      </div>`;
+  },
+
+  settings() {
+    const st = S.settings, info = S.info;
+    const opts = [["home", "收藏夹主页"], ["last", "上次打开的网站"], ...S.bookmarks.map((b) => [b.id, b.name])];
+    return `
+      <div class="page-head">${backBtn()}<h1>设置</h1></div>
+      <div class="section"><h2>通用</h2><div class="card">
+        <div class="row"><div class="grow"><div class="label">启动时打开</div><div class="desc">打开 Intra 时显示的页面</div></div>
+          <select class="input" id="s-default" style="width:200px">
+            ${opts.map(([v, n]) => `<option value="${esc(v)}" ${st.defaultPage === v ? "selected" : ""}>${esc(n)}</option>`).join("")}
+          </select></div>
+        <div class="row"><div class="grow"><div class="label">记住窗口大小和位置</div><div class="desc">下次启动时恢复上次关闭时的窗口状态</div></div>
+          <button class="switch" role="switch" id="s-remember" aria-checked="${!!st.rememberWindow}"></button></div>
+      </div></div>
+
+      <div class="section"><h2>证书</h2>
+        <p class="hint">Intra 不信任 Windows 系统证书库。HTTPS 网站只有在证书链指向内置的 ${info.rootCount || 0} 个 Mozilla 公共根证书，或下方手动添加的 CA 时才会被打开。</p>
+        <div class="card">
+          ${S.cas.length ? S.cas.map((c) => `
+            <div class="row">
+              <div style="color:var(--tertiary)">${I.shield}</div>
+              <div class="grow"><div class="label trunc">${esc(c.name)}</div>
+                <div class="desc trunc mono" title="SHA-256 ${esc(c.fingerprint)}">${esc(c.fingerprint.slice(0, 47))}…</div>
+                <div class="desc">有效期至 ${esc(c.notAfter)} · 添加于 ${esc(c.addedAt)}</div></div>
+              <button class="btn sm danger ${confirmDel === c.id ? "confirm" : ""}" data-delca="${esc(c.id)}">${confirmDel === c.id ? "确认删除" : "删除"}</button>
+            </div>`).join("") : `<div class="empty-row">尚未添加自定义 CA</div>`}
+          <div class="row" style="min-height:52px">
+            <div class="grow desc" style="margin:0">支持 .pem / .crt / .cer / .der，一个文件中可包含多个证书</div>
+            <button class="btn sm" id="addca">${I.plus}添加 CA 证书</button>
+            <input type="file" id="cafile" accept=".pem,.crt,.cer,.der,.txt" multiple hidden>
+          </div>
+        </div></div>
+
+      <div class="section"><h2>配置存储</h2><div class="card kv">
+        <div class="row"><div class="k">保存位置</div><div class="v trunc mono" title="${esc(info.exePath)}">${esc(info.exePath)}</div></div>
+        <div class="row"><div class="k">说明</div><div class="v" style="color:var(--secondary)">所有设置都附加在 exe 文件末尾，复制 Intra.exe 即可连同收藏夹、证书一起带走。</div></div>
+      </div></div>`;
+  },
+
+  about() {
+    const info = S.info;
+    return `
+      <div class="page-head">${backBtn()}<h1></h1></div>
+      <div class="about">
+        <div class="mark">${LOGO}</div>
+        <h1>Intra</h1>
+        <div class="ver">版本 ${esc(info.version)}</div>
+        <p class="lead">把网站当作本机应用打开。为每个网站自定义名称、网址和 DNS 记录，并使用独立、可控的证书信任列表。</p>
+        <div class="card kv">
+          <div class="row"><div class="k">浏览器内核</div><div class="v">Microsoft Edge WebView2 ${esc(info.webview2)}</div></div>
+          <div class="row"><div class="k">证书信任</div><div class="v">Mozilla 公共根证书 ${info.rootCount} 个（${esc(info.bundleDate)}）+ 自定义 CA ${S.cas.length} 个</div></div>
+          <div class="row"><div class="k">系统证书库</div><div class="v">不使用</div></div>
+          <div class="row"><div class="k">配置文件</div><div class="v">内嵌于 exe 末尾</div></div>
+        </div>
+      </div>`;
+  },
+};
+
+function startDraft(id) {
+  const b = S.bookmarks.find((x) => x.id === id);
+  draft = b ? JSON.parse(JSON.stringify(b)) : { id: "", name: "", url: "", records: [] };
+  draft.records = draft.records || [];
+  draftErrors = {};
+}
+
+function rerenderEdit() {
+  const keep = document.activeElement;
+  const sel = keep && keep.id ? "#" + keep.id : null;
+  const recSel = keep?.closest?.(".rec") ? `.rec[data-i="${keep.closest(".rec").dataset.i}"] [data-k="${keep.dataset.k}"]` : null;
+  const pos = keep?.selectionStart;
+  renderMain(true);
+  const el = (recSel && $(recSel)) || (sel && $(sel));
+  if (el) { el.focus(); if (pos != null && el.setSelectionRange) try { el.setSelectionRange(pos, pos); } catch {} }
+}
+
+const IPV4 = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
+const HOSTRE = /^(\*\.)?([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?\.?$/i;
+function isIP(v) { return IPV4.test(v) || (v.includes(":") && /^[0-9a-f:.]+$/i.test(v)); }
+
+function validate() {
+  const d = draft, e = {};
+  if (!d.name.trim()) e.name = "请输入名称";
+  if (!d.url.trim()) e.url = "请输入网址";
+  else {
+    try {
+      const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(d.url.trim()) ? d.url.trim() : "https://" + d.url.trim());
+      if (!/^https?:$/.test(u.protocol)) e.url = "仅支持 http 和 https 网址";
+    } catch { e.url = "网址格式不正确"; }
+  }
+  const seen = {};
+  d.records.forEach((r, i) => {
+    const h = r.host.trim(), v = r.value.trim();
+    if (!h && !v) return;
+    if (!HOSTRE.test(h)) { e["r" + i + "h"] = 1; e["r" + i] = "主机名格式不正确"; return; }
+    if (r.type === "A" && !isIP(v)) { e["r" + i + "v"] = 1; e["r" + i] = "A 记录的值必须是 IP 地址"; return; }
+    if (r.type === "CNAME" && (!HOSTRE.test(v) || v.startsWith("*"))) { e["r" + i + "v"] = 1; e["r" + i] = "CNAME 的值必须是主机名"; return; }
+    const k = h.toLowerCase();
+    if (seen[k] && (seen[k] !== r.type || r.type === "CNAME")) { e["r" + i + "h"] = 1; e["r" + i] = "同一主机名不能同时有 CNAME 和其他记录"; return; }
+    seen[k] = r.type;
+  });
+  draftErrors = e;
+  return Object.keys(e).length === 0;
+}
+
+const BIND = {
+  home: bindCommon,
+  bookmarks() {
+    bindCommon();
+    document.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => send({ t: "moveBookmark", id: b.dataset.move, dir: +b.dataset.dir })));
+  },
+  edit() {
+    bindCommon();
+    $("#f-name").oninput = (e) => (draft.name = e.target.value);
+    $("#f-url").oninput = (e) => { draft.url = e.target.value; };
+    $("#f-url").onchange = () => rerenderEdit();
+    document.querySelectorAll(".rec").forEach((row) => {
+      const r = draft.records[+row.dataset.i];
+      row.querySelectorAll("[data-k]").forEach((inp) => {
+        inp.oninput = () => { r[inp.dataset.k] = inp.value; };
+        if (inp.tagName === "SELECT") inp.onchange = () => { r.type = inp.value; rerenderEdit(); };
+      });
+    });
+    document.querySelectorAll("[data-delrec]").forEach((b) => (b.onclick = () => { draft.records.splice(+b.dataset.delrec, 1); draftErrors = {}; rerenderEdit(); }));
+    $("#addrec").onclick = () => {
+      draft.records.push({ host: draft.records.length ? "" : hostOf(draft.url).split(":")[0], type: "A", value: "" });
+      rerenderEdit();
+      const rows = document.querySelectorAll(".rec");
+      const last = rows[rows.length - 1];
+      last && (last.querySelector('[data-k="host"]').value ? last.querySelector('[data-k="value"]') : last.querySelector('[data-k="host"]')).focus();
+    };
+    const sug = $("#sugrec");
+    if (sug) sug.onclick = () => {
+      draft.records.push({ host: hostOf(draft.url).split(":")[0], type: "A", value: "" });
+      rerenderEdit();
+      const rows = document.querySelectorAll(".rec");
+      rows[rows.length - 1].querySelector('[data-k="value"]').focus();
+    };
+    const save = (open) => {
+      if (!validate()) { rerenderEdit(); return; }
+      const b = { ...draft, name: draft.name.trim(), url: draft.url.trim(),
+        records: draft.records.filter((r) => r.host.trim() || r.value.trim()).map((r) => ({ host: r.host.trim(), type: r.type, value: r.value.trim() })) };
+      send({ t: "saveBookmark", bookmark: b, open });
+    };
+    $("#save").onclick = () => save(false);
+    $("#saveopen").onclick = () => save(true);
+    const del = $("#del");
+    if (del) del.onclick = () => {
+      if (confirmDel === draft.id) send({ t: "deleteBookmark", id: draft.id });
+      else { confirmDel = draft.id; rerenderEdit(); }
+    };
+    if (!draft.id) setTimeout(() => $("#f-name")?.focus(), 0);
+  },
+  settings() {
+    bindCommon();
+    $("#s-default").onchange = (e) => send({ t: "settings", defaultPage: e.target.value, rememberWindow: !!S.settings.rememberWindow });
+    $("#s-remember").onclick = () => send({ t: "settings", defaultPage: S.settings.defaultPage, rememberWindow: !S.settings.rememberWindow });
+    $("#addca").onclick = () => $("#cafile").click();
+    $("#cafile").onchange = async (e) => {
+      for (const f of e.target.files) {
+        const buf = new Uint8Array(await f.arrayBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+        send({ t: "addCA", name: f.name, data: btoa(bin) });
+      }
+      e.target.value = "";
+    };
+    document.querySelectorAll("[data-delca]").forEach((b) => (b.onclick = () => {
+      const id = b.dataset.delca;
+      if (confirmDel === id) { confirmDel = null; send({ t: "deleteCA", id }); }
+      else { confirmDel = id; renderMain(true); }
+    }));
+  },
+  about: bindCommon,
+};
+
+/* ======================= dropdown popup ======================= */
+let kbIndex = -1;
+function renderMenu() {
+  document.body.classList.add("menu");
+  const bs = S.bookmarks, cur = S.current?.id;
+  $("#root").innerHTML = `
+    <div class="dd" id="dd">
+      ${bs.length ? `<div class="dd-label">收藏夹</div>` + bs.map((b, i) => `
+        <div class="dd-item${i === kbIndex ? " kb" : ""}" data-open="${esc(b.id)}" data-i="${i}" role="menuitem">
+          ${avatar(b, "sm")}
+          <div class="grow"><span class="nm">${esc(b.name)}</span><span class="hs">${esc(hostOf(b.url))}</span></div>
+          ${b.id === cur ? `<span class="cur" title="当前打开"></span>` : ""}
+          <button class="tool" data-edit="${esc(b.id)}" title="编辑">${I.edit}</button>
+        </div>`).join("") : `<div class="dd-empty">还没有收藏的网站</div>`}
+      <div class="dd-sep"></div>
+      <div class="dd-foot">
+        <button class="dd-item" id="dd-add">${I.plus}<span>添加网站</span></button>
+        <button class="dd-item" id="dd-manage">${I.list}<span>管理收藏夹</span></button>
+      </div>
+    </div>`;
+  document.querySelectorAll("[data-open]").forEach((el) => (el.onclick = (e) => {
+    const ed = e.target.closest("[data-edit]");
+    if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
+    else send({ t: "open", id: el.dataset.open });
+  }));
+  $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
+  $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
+  send({ t: "menuSize", h: Math.ceil($("#dd").getBoundingClientRect().height) });
+}
+
+function setupMenu() {
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("keydown", (e) => {
+    const n = S.bookmarks.length;
+    if (e.key === "Escape") send({ t: "menuClose" });
+    else if (e.key === "ArrowDown" && n) { kbIndex = (kbIndex + 1) % n; renderMenu(); }
+    else if (e.key === "ArrowUp" && n) { kbIndex = (kbIndex - 1 + n) % n; renderMenu(); }
+    else if (e.key === "Enter" && kbIndex >= 0 && kbIndex < n) send({ t: "open", id: S.bookmarks[kbIndex].id });
+    else return;
+    e.preventDefault();
+  });
+}
+
+function render() { MODE === "menu" ? (kbIndex = S.menuOpen ? kbIndex : -1, renderMenu()) : renderMain(); }
+
+if (MODE === "menu") setupMenu(); else setupMain();
+send({ t: "ready" });
+</script>
+</body>
+</html>
