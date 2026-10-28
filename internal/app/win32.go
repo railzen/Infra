@@ -51,6 +51,8 @@ var (
 	pSetProcessDpiAwarenessCx = user32.NewProc("SetProcessDpiAwarenessContext")
 	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pGetWindow                = user32.NewProc("GetWindow")
+	pGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
+	pGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 	pCreateSolidBrush         = windows.NewLazySystemDLL("gdi32.dll").NewProc("CreateSolidBrush")
 	pDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")

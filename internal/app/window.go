@@ -298,7 +298,9 @@ func (w *Window) activate() {
 // layout positions the two webviews: the UI view owns the title bar strip,
 // and the whole client area while a page (home, links manager…) is shown.
 func (w *Window) layout() {
-	if w.ui == nil || w.ui.GetController() == nil {
+	// a minimized window has an empty client area; WebView2 rejects such
+	// bounds, and the layout is redone on restore anyway
+	if w.ui == nil || w.ui.GetController() == nil || isIconic(w.hwnd) {
 		return
 	}
 	cr := clientRect(w.hwnd)
@@ -385,13 +387,13 @@ func (w *Window) showPage(page, arg string) {
 	w.push()
 	if page == "" {
 		w.focusSite()
-	} else if w.ui != nil {
+	} else if w.ui != nil && !isIconic(w.hwnd) {
 		w.ui.Focus()
 	}
 }
 
 func (w *Window) focusSite() {
-	if w.site != nil && w.cur != nil && w.page == "" {
+	if w.site != nil && w.cur != nil && w.page == "" && !isIconic(w.hwnd) {
 		w.site.Focus()
 	}
 }
@@ -541,7 +543,8 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 				w.active = active
 				w.push()
 			}
-			if wp&0xffff != waInactive && w.page == "" {
+			// the high word is set when the window is activated while minimized
+			if wp&0xffff != waInactive && wp>>16&0xffff == 0 && w.page == "" {
 				w.focusSite()
 			}
 		}
@@ -583,7 +586,17 @@ func cursorLParam() uintptr {
 	return uintptr(uint16(pt.X)) | uintptr(uint16(pt.Y))<<16
 }
 
+// beginNCDrag hands a press in the title bar to Windows' move/size loop. The
+// loop must only start while the button is still down; started after release
+// it would wait for, and swallow, the next click.
 func (w *Window) beginNCDrag(hit uintptr) {
+	vk := uintptr(0x01) // VK_LBUTTON
+	if swapped, _, _ := pGetSystemMetrics.Call(23 /*SM_SWAPBUTTON*/); swapped != 0 {
+		vk = 0x02 // VK_RBUTTON is the primary button when buttons are swapped
+	}
+	if state, _, _ := pGetAsyncKeyState.Call(vk); state&0x8000 == 0 {
+		return
+	}
 	pReleaseCapture.Call()
 	pPostMessageW.Call(w.hwnd, wmNCLButtonDown, hit, cursorLParam())
 }

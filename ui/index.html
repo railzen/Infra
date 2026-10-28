@@ -83,9 +83,9 @@ svg { display: block; flex: none; }
 .cap.close:hover { background: #e81123; color: #fff; }
 .cap.close:active { background: #f1707a; color: #fff; }
 body.inactive .cap:not(:hover) svg { opacity: .4; }
-.resize-top { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 60; cursor: ns-resize; }
-.resize-top .tl, .resize-top .tr { position: absolute; top: 0; width: 10px; height: 6px; }
-.resize-top .tl { left: 0; cursor: nwse-resize; } .resize-top .tr { right: 0; cursor: nesw-resize; }
+/* stops short of the three 46px caption buttons so the whole × stays clickable */
+.resize-top { position: fixed; top: 0; left: 0; right: 138px; height: 4px; z-index: 60; cursor: ns-resize; }
+.resize-top .tl { position: absolute; top: 0; left: 0; width: 10px; height: 6px; cursor: nwse-resize; }
 body.maximized .resize-top { display: none; }
 
 /* ---------- pages ---------- */
@@ -327,7 +327,7 @@ window.intra = {
 /* ======================= main window ======================= */
 function barHTML() {
   return `
-  <div class="resize-top" data-resize="top"><div class="tl" data-resize="tl"></div><div class="tr" data-resize="tr"></div></div>
+  <div class="resize-top" data-resize="top"><div class="tl" data-resize="tl"></div></div>
   <div class="bar" id="bar">
     <div class="navs" id="navs">
       <button class="icon-btn" id="n-back" title="后退 (Alt+←)">${I.back}</button>
@@ -352,18 +352,32 @@ function barHTML() {
 function setupMain() {
   $("#root").innerHTML = barHTML();
   const bar = $("#bar");
+  // Moving/resizing hands the mouse to Windows' modal move loop. Starting it
+  // on a plain click (button already released) leaves Windows waiting for the
+  // next click, which then gets swallowed — so only start once the pointer
+  // actually moves with the button held.
+  let pressed = null; // { x, y, msg }
   bar.addEventListener("mousedown", (e) => {
     if (e.button !== 0 || !e.target.closest("[data-drag]")) return;
-    if (e.detail === 2) { send({ t: "max" }); return; }
-    send({ t: "drag" });
+    if (e.detail === 2) { pressed = null; send({ t: "max" }); return; }
+    pressed = { x: e.screenX, y: e.screenY, msg: { t: "drag" } };
   });
+  document.addEventListener("mousemove", (e) => {
+    if (!pressed) return;
+    if (!(e.buttons & 1)) { pressed = null; return; }
+    if (Math.abs(e.screenX - pressed.x) > 3 || Math.abs(e.screenY - pressed.y) > 3) {
+      send(pressed.msg);
+      pressed = null;
+    }
+  });
+  document.addEventListener("mouseup", () => (pressed = null));
   bar.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (e.target.closest("[data-drag]")) send({ t: "sysmenu" });
   });
   document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
   $(".resize-top").addEventListener("mousedown", (e) => {
-    if (e.button === 0) send({ t: "resize", edge: e.target.dataset.resize });
+    if (e.button === 0) pressed = { x: e.screenX, y: e.screenY, msg: { t: "resize", edge: e.target.dataset.resize } };
   });
   for (const [id, kind] of [["m-fav", "links"], ["m-set", "settings"], ["m-about", "about"]]) {
     $("#" + id).addEventListener("mousedown", (e) => {
