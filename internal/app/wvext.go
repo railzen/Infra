@@ -50,6 +50,7 @@ func webviewOf(c *edge.Chromium) webview {
 
 func (w webview) vt() *wv2Vtbl { return *(**wv2Vtbl)(unsafe.Pointer(w)) }
 
+//go:uintptrescapes
 func (w webview) call(fn uintptr, args ...uintptr) uintptr {
 	r, _, _ := syscall.SyscallN(fn, append([]uintptr{uintptr(w)}, args...)...)
 	return r
@@ -113,6 +114,8 @@ func (w webview) on(add uintptr, fn func(sender, args uintptr)) {
 }
 
 // comCall invokes vtable slot idx on an arbitrary COM object pointer.
+//
+//go:uintptrescapes
 func comCall(obj uintptr, idx int, args ...uintptr) uintptr {
 	vt := *(*[32]uintptr)(unsafe.Pointer(*(*uintptr)(unsafe.Pointer(obj))))
 	r, _, _ := syscall.SyscallN(vt[idx], append([]uintptr{obj}, args...)...)

@@ -32,6 +32,7 @@ var (
 	pGetSystemMetricsForDpi   = user32.NewProc("GetSystemMetricsForDpi")
 	pLoadImageW               = user32.NewProc("LoadImageW")
 	pLoadCursorW              = user32.NewProc("LoadCursorW")
+	pGetForegroundWindow      = user32.NewProc("GetForegroundWindow")
 	pSetForegroundWindow      = user32.NewProc("SetForegroundWindow")
 	pFindWindowW              = user32.NewProc("FindWindowW")
 	pMessageBoxW              = user32.NewProc("MessageBoxW")
@@ -190,7 +191,7 @@ func ptr[T any](p *T) uintptr { return uintptr(unsafe.Pointer(p)) }
 
 func clientRect(hwnd uintptr) rect {
 	var r rect
-	pGetClientRect.Call(hwnd, ptr(&r))
+	pGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
 	return r
 }
 

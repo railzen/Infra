@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"log"
 	"math"
 	"strings"
 	"unsafe"
@@ -28,6 +29,7 @@ type Window struct {
 	cur           *siteState
 	active        bool
 	closing       bool
+	focusPending  bool
 }
 
 var windowsByHwnd = map[uintptr]*Window{}
@@ -205,7 +207,10 @@ func (w *Window) applyPlacement(ws *config.WindowState) bool {
 		wp.ShowCmd = swShowMaximized
 	}
 	wp.Length = uint32(unsafe.Sizeof(wp))
-	pSetWindowPlacement.Call(w.hwnd, ptr(&wp))
+	if ok, _, err := pSetWindowPlacement.Call(w.hwnd, uintptr(unsafe.Pointer(&wp))); ok == 0 {
+		log.Printf("restore window placement: %v", err)
+		return false
+	}
 	return true
 }
 
@@ -299,12 +304,22 @@ func (w *Window) activate() {
 // layout positions the two webviews: the UI view owns the title bar strip,
 // and the whole client area while a page (home, links manager…) is shown.
 func (w *Window) layout() {
-	// a minimized window has an empty client area; WebView2 rejects such
-	// bounds, and the layout is redone on restore anyway
-	if w.ui == nil || w.ui.GetController() == nil || isIconic(w.hwnd) {
+	if w.closing || w.ui == nil || w.ui.GetController() == nil {
+		return
+	}
+	// Keep the last valid bounds while minimized, but explicitly hide both
+	// controllers so WebView2's visibility follows the native window.
+	if isIconic(w.hwnd) {
+		w.ui.Hide()
+		if w.site != nil && w.site.GetController() != nil {
+			w.site.Hide()
+		}
 		return
 	}
 	cr := clientRect(w.hwnd)
+	if cr.W() <= 0 || cr.H() <= 0 {
+		return
+	}
 	bar := w.barPx()
 	full := w.page != "" || w.cur == nil
 	if full {
@@ -312,6 +327,7 @@ func (w *Window) layout() {
 	} else {
 		w.ui.SetSize(edge.Rect{Left: 0, Top: 0, Right: cr.Right, Bottom: bar})
 	}
+	w.ui.Show()
 	if w.site != nil && w.site.GetController() != nil {
 		w.site.SetSize(edge.Rect{Left: 0, Top: bar, Right: cr.Right, Bottom: max(cr.Bottom, bar)})
 		if full {
@@ -391,6 +407,28 @@ func (w *Window) showPage(page, arg string) {
 	} else if w.ui != nil && !isIconic(w.hwnd) {
 		w.ui.Focus()
 	}
+}
+
+// Activation can arrive before restore finishes showing the controllers.
+// Restore focus after that transition, and only while this window is foreground.
+func (w *Window) requestFocus() {
+	if w.closing || w.focusPending {
+		return
+	}
+	w.focusPending = true
+	w.a.post(func() {
+		w.focusPending = false
+		foreground, _, _ := pGetForegroundWindow.Call()
+		if w.closing || isIconic(w.hwnd) || foreground != w.hwnd || (w.menu != nil && w.menu.open) {
+			return
+		}
+		w.layout()
+		if w.page == "" && w.cur != nil {
+			w.focusSite()
+		} else if w.ui != nil && w.ui.GetController() != nil {
+			w.ui.Focus()
+		}
+	})
 }
 
 func (w *Window) focusSite() {
@@ -527,6 +565,10 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 			}
 			w.push()
 		}
+	case wmSetFocus:
+		if w != nil {
+			w.requestFocus()
+		}
 	case wmMove, wmMoving:
 		if w != nil {
 			w.notifyMoved()
@@ -544,9 +586,8 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 				w.active = active
 				w.push()
 			}
-			// the high word is set when the window is activated while minimized
-			if wp&0xffff != waInactive && wp>>16&0xffff == 0 && w.page == "" {
-				w.focusSite()
+			if wp&0xffff != waInactive {
+				w.requestFocus()
 			}
 		}
 	case wmGetMinMaxInfo:

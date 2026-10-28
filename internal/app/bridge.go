@@ -69,10 +69,18 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 			hit = 14 // HTTOPRIGHT
 		}
 		w.beginNCDrag(hit)
-	case "min":
-		pShowWindow.Call(w.hwnd, swMinimize)
-	case "max":
-		w.toggleMaximize()
+	case "min", "max":
+		// ShowWindow pumps window messages; leave the WebView2 callback first.
+		a.post(func() {
+			if w.closing {
+				return
+			}
+			if m.T == "min" {
+				pShowWindow.Call(w.hwnd, swMinimize)
+			} else {
+				w.toggleMaximize()
+			}
+		})
 	case "close":
 		pPostMessageW.Call(w.hwnd, wmClose, 0, 0)
 	case "sysmenu":
