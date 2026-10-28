@@ -12,13 +12,13 @@ func TestExportRoundTrip(t *testing.T) {
 	c.DefaultPage = "a"
 	c.Window = &WindowState{X: 1, Y: 2, W: 3, H: 4}
 	c.Bookmarks = []Bookmark{{ID: "a", Name: "OA", URL: "https://oa.corp",
-		Records: []DNSRecord{{Host: "oa.corp", Type: "CNAME", Value: "lb.corp"}}}}
+		Records: []DNSRecord{{Host: "oa.corp", Type: "CNAME", Value: "lb.corp"}}, Window: &WindowState{W: 9}}}
 	c.CAs = []CA{{ID: "x", Name: "Corp Root", PEM: "-----BEGIN CERTIFICATE-----\n..."}}
 	data, err := c.Export()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(data, []byte(`"X"`)) {
+	if bytes.Contains(data, []byte(`"X"`)) || bytes.Contains(data, []byte(`"window"`)) {
 		t.Fatal("window placement must not be exported")
 	}
 	e, err := ParseExport(append([]byte("\xEF\xBB\xBF"), data...))

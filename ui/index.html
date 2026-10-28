@@ -636,7 +636,7 @@ const PANELS = {
         <select class="input sm" id="s-default">
           ${opts.map(([v, n]) => `<option value="${esc(v)}" ${st.defaultPage === v ? "selected" : ""}>${esc(n)}</option>`).join("")}
         </select></div>
-      <div class="pp-row"><span class="grow">记住窗口大小和位置</span>
+      <div class="pp-row"><span class="grow">按链接记住窗口大小和位置</span>
         <button class="switch" role="switch" id="s-remember" aria-checked="${!!st.rememberWindow}"></button></div>
       <div class="dd-sep"></div>
       <div class="dd-label pp-sec"><span class="grow">证书</span>

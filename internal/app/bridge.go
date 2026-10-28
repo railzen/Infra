@@ -122,6 +122,9 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		a.cfg.RememberWindow = m.RememberWindow
 		if !m.RememberWindow {
 			a.cfg.Window = nil
+			for i := range a.cfg.Bookmarks {
+				a.cfg.Bookmarks[i].Window = nil
+			}
 		}
 		a.save()
 		a.pushAll()
@@ -207,11 +210,13 @@ func (a *App) importConfig(w *Window) {
 func (a *App) mergeImport(e *config.ExportFormat) (added, updated, cas, skipped int) {
 	for _, b := range e.Bookmarks {
 		b.Records = append([]config.DNSRecord{}, b.Records...)
+		b.Window = nil // placement is machine specific
 		if err := validateBookmark(&b); err != nil {
 			skipped++
 			continue
 		}
 		if existing := a.cfg.Bookmark(b.ID); b.ID != "" && existing != nil {
+			b.Window = existing.Window
 			*existing = b
 			updated++
 			continue
@@ -299,9 +304,11 @@ func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
 		return
 	}
 	if existing := a.cfg.Bookmark(b.ID); b.ID != "" && existing != nil {
+		b.Window = existing.Window // placement is not part of the edit form
 		*existing = *b
 	} else {
 		b.ID = newID()
+		b.Window = nil
 		a.cfg.Bookmarks = append(a.cfg.Bookmarks, *b)
 	}
 	for _, x := range a.windows {

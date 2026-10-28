@@ -68,9 +68,11 @@ func (a *App) registerWindowClass() error {
 	return nil
 }
 
-// newWindow creates and shows a window. A window opened from another one is
-// cascaded from it; the first window uses the remembered placement.
-func (a *App) newWindow(from *Window) (*Window, error) {
+// newWindow creates and shows a window for the bookmark `id` ("" for the
+// home page). It uses that link's remembered placement; without one, a window
+// opened from another is cascaded from it and the first window uses the home
+// page placement.
+func (a *App) newWindow(from *Window, id string) (*Window, error) {
 	w := &Window{a: a, active: true}
 	const cwUseDefault = 0x80000000
 	h, _, err := pCreateWindowExW.Call(0, ptr(u16(a.className())), ptr(u16("Intra")),
@@ -82,9 +84,15 @@ func (a *App) newWindow(from *Window) (*Window, error) {
 	w.hwnd = h
 	windowsByHwnd[h] = w
 	a.windows = append(a.windows, w)
-	if from != nil {
+	var saved *config.WindowState
+	if b := a.cfg.Bookmark(id); b != nil {
+		saved = b.Window
+	}
+	switch {
+	case w.applyPlacement(saved):
+	case from != nil:
 		w.cascadeFrom(from)
-	} else {
+	default:
 		w.restorePlacement()
 	}
 	w.embed()
@@ -178,20 +186,32 @@ func (w *Window) hookSite() {
 
 // ---------------------------------------------------------------- placement
 
-// restorePlacement shows the window, either where it was last closed or
-// centered on the primary monitor's work area.
+// Window size and position are remembered per link: a window showing a link
+// saves its placement onto that bookmark, a window on the home page saves to
+// Config.Window.
+
+// applyPlacement moves the window to a saved placement and shows it. It
+// returns false when there is nothing usable to restore.
+func (w *Window) applyPlacement(ws *config.WindowState) bool {
+	if !w.a.cfg.RememberWindow || ws == nil || ws.W <= 200 || ws.H <= 150 || !onScreen(ws) {
+		return false
+	}
+	wp := windowPlacement{
+		ShowCmd:        swShowNormal,
+		NormalPosition: rect{int32(ws.X), int32(ws.Y), int32(ws.X + ws.W), int32(ws.Y + ws.H)},
+	}
+	if ws.Maximized {
+		wp.ShowCmd = swShowMaximized
+	}
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	pSetWindowPlacement.Call(w.hwnd, ptr(&wp))
+	return true
+}
+
+// restorePlacement shows the window where the home page window was last
+// closed, or centered on the primary monitor's work area.
 func (w *Window) restorePlacement() {
-	cfg := w.a.cfg
-	if ws := cfg.Window; cfg.RememberWindow && ws != nil && ws.W > 200 && ws.H > 150 && onScreen(ws) {
-		wp := windowPlacement{
-			ShowCmd:        swShowNormal,
-			NormalPosition: rect{int32(ws.X), int32(ws.Y), int32(ws.X + ws.W), int32(ws.Y + ws.H)},
-		}
-		if ws.Maximized {
-			wp.ShowCmd = swShowMaximized
-		}
-		wp.Length = uint32(unsafe.Sizeof(wp))
-		pSetWindowPlacement.Call(w.hwnd, ptr(&wp))
+	if w.applyPlacement(w.a.cfg.Window) {
 		return
 	}
 	s := w.scale()
@@ -239,8 +259,11 @@ func onScreen(ws *config.WindowState) bool {
 	return m != 0
 }
 
+// rememberPlacement saves the window's placement onto the link it shows, or
+// as the home page placement.
 func (w *Window) rememberPlacement() {
-	if !w.a.cfg.RememberWindow {
+	cfg := w.a.cfg
+	if !cfg.RememberWindow {
 		return
 	}
 	wp := windowPlacement{}
@@ -249,8 +272,15 @@ func (w *Window) rememberPlacement() {
 		return
 	}
 	n := wp.NormalPosition
-	w.a.cfg.Window = &config.WindowState{X: int(n.Left), Y: int(n.Top), W: int(n.W()), H: int(n.H()),
+	ws := &config.WindowState{X: int(n.Left), Y: int(n.Top), W: int(n.W()), H: int(n.H()),
 		Maximized: wp.ShowCmd == swShowMaximized || (wp.ShowCmd == swShowMinimized && wp.Flags&2 != 0)}
+	if w.cur != nil {
+		if b := cfg.Bookmark(w.cur.ID); b != nil {
+			b.Window = ws
+			return
+		}
+	}
+	cfg.Window = ws
 }
 
 func (w *Window) activate() {
@@ -331,17 +361,16 @@ func (w *Window) notifyMoved() {
 
 // ---------------------------------------------------------------- page state
 
-func (w *Window) startPage() {
-	cfg := w.a.cfg
-	dp := cfg.DefaultPage
+// startBookmark is the link the first window opens, or "" for the home page.
+func (a *App) startBookmark() string {
+	dp := a.cfg.DefaultPage
 	if dp == "last" {
-		dp = cfg.LastBookmark
+		dp = a.cfg.LastBookmark
 	}
-	if dp != "" && dp != "home" && cfg.Bookmark(dp) != nil {
-		w.openBookmark(dp)
-		return
+	if dp != "" && dp != "home" && a.cfg.Bookmark(dp) != nil {
+		return dp
 	}
-	w.showPage("home", "")
+	return ""
 }
 
 func (w *Window) showPage(page, arg string) {

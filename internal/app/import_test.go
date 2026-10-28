@@ -59,7 +59,7 @@ func TestExportImportMerge(t *testing.T) {
 	// destination already has "oa" (old name) and the same CA
 	a := &App{store: store, cfg: config.Default()}
 	a.saver = newSaver(store, func(err error) { t.Error(err) })
-	a.cfg.Bookmarks = []config.Bookmark{{ID: "oa", Name: "OA 旧", URL: "https://oa.corp"}, {ID: "mail", Name: "Mail", URL: "https://mail.corp"}}
+	a.cfg.Bookmarks = []config.Bookmark{{ID: "oa", Name: "OA 旧", URL: "https://oa.corp", Window: &config.WindowState{W: 900, H: 600}}, {ID: "mail", Name: "Mail", URL: "https://mail.corp"}}
 	a.addCert(ca)
 
 	added, updated, cas, skipped := a.mergeImport(e)
@@ -68,6 +68,9 @@ func TestExportImportMerge(t *testing.T) {
 	}
 	if len(a.cfg.Bookmarks) != 3 || a.cfg.Bookmark("oa").Name != "OA 新" || a.cfg.Bookmark("mail") == nil || a.cfg.Bookmark("bad") != nil {
 		t.Fatalf("bookmarks: %+v", a.cfg.Bookmarks)
+	}
+	if ws := a.cfg.Bookmark("oa").Window; ws == nil || ws.W != 900 {
+		t.Fatalf("import must keep the link's saved window, got %+v", ws)
 	}
 	if a.cfg.DefaultPage != "oa" || a.cfg.RememberWindow || len(a.cfg.CAs) != 1 {
 		t.Fatalf("settings/cas: %+v", a.cfg)

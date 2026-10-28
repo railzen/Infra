@@ -144,12 +144,17 @@ func Run(version string) {
 		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
 		return
 	}
-	w, err := a.newWindow(nil)
+	start := a.startBookmark()
+	w, err := a.newWindow(nil, start)
 	if err != nil {
 		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
 		return
 	}
-	w.startPage()
+	if start != "" {
+		w.openBookmark(start)
+	} else {
+		w.showPage("home", "")
+	}
 
 	var m msg
 	for {
@@ -254,7 +259,8 @@ func lockDownUI(c *edge.Chromium) {
 // home page loads it in place; a window already showing a site gets a new
 // window; a bookmark already open somewhere brings that window forward.
 func (a *App) open(from *Window, id string) {
-	if a.cfg.Bookmark(id) == nil {
+	b := a.cfg.Bookmark(id)
+	if b == nil {
 		return
 	}
 	for _, w := range a.windows {
@@ -267,12 +273,16 @@ func (a *App) open(from *Window, id string) {
 		}
 	}
 	if from.cur == nil {
+		// the home page window becomes this link's window: keep the home
+		// placement, then take on the link's own size and position
+		from.rememberPlacement()
+		from.applyPlacement(b.Window)
 		from.openBookmark(id)
 		return
 	}
 	// creating webviews pumps messages; do it outside the current webview callback
 	a.post(func() {
-		w, err := a.newWindow(from)
+		w, err := a.newWindow(from, id)
 		if err != nil {
 			from.toast("无法打开新窗口："+err.Error(), "err")
 			return

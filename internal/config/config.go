@@ -34,6 +34,8 @@ type Bookmark struct {
 	Name    string      `json:"name"`
 	URL     string      `json:"url"`
 	Records []DNSRecord `json:"records"`
+	// Window is where this link's window was last closed (machine specific, not exported).
+	Window *WindowState `json:"window,omitempty"`
 }
 
 type CA struct {

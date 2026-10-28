@@ -34,6 +34,7 @@ func (c *Config) Export() ([]byte, error) {
 	e.Settings.RememberWindow = c.RememberWindow
 	e.Bookmarks = append([]Bookmark{}, c.Bookmarks...)
 	for i := range e.Bookmarks {
+		e.Bookmarks[i].Window = nil
 		if e.Bookmarks[i].Records == nil {
 			e.Bookmarks[i].Records = []DNSRecord{}
 		}
