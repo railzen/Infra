@@ -30,7 +30,6 @@ type Window struct {
 	active        bool
 	closing       bool
 	focusPending  bool
-	closedToTray  bool // hidden by closing the last window, not by the tray icon
 	grab          pointerGrab
 }
 
@@ -600,6 +599,14 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 				w.menu.hide()
 			}
 			w.push()
+			// catches every way of minimizing: the bar button, the taskbar, Win+Down…
+			if wp == sizeMinimized && w.a.minimizesToTray() {
+				w.a.post(func() {
+					if !w.closing && isIconic(w.hwnd) && isVisible(w.hwnd) {
+						w.hideToTray()
+					}
+				})
+			}
 		}
 	case wmSetFocus:
 		if w != nil {
@@ -607,7 +614,6 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		}
 	case wmShowWindow:
 		if w != nil && wp != 0 {
-			w.closedToTray = false
 			// sent before the window becomes visible; show the webviews after
 			w.a.post(w.layout)
 		}
@@ -667,11 +673,6 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 	case wmClose:
 		if w != nil {
-			if w.a.hidesOnClose() {
-				w.hideToTray()
-				w.closedToTray = true
-				return 0
-			}
 			w.a.closeWindow(w)
 		}
 		pDestroyWindow.Call(hwnd)

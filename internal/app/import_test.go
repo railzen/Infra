@@ -37,7 +37,7 @@ func TestExportImportMerge(t *testing.T) {
 	src := config.Default()
 	src.DefaultPage = "oa"
 	src.RememberWindow = false
-	src.CloseToTray = true
+	src.MinimizeToTray = true
 	src.Bookmarks = []config.Bookmark{
 		{ID: "oa", Name: "OA 新", URL: "oa.corp", Records: []config.DNSRecord{{Host: "oa.corp", Type: "A", Value: "10.0.0.2"}}},
 		{ID: "wiki", Name: "Wiki", URL: "https://wiki.corp"},
@@ -70,7 +70,7 @@ func TestExportImportMerge(t *testing.T) {
 	if ws := a.cfg.Bookmark("oa").Window; ws == nil || ws.W != 900 {
 		t.Fatalf("import must keep the link's saved window, got %+v", ws)
 	}
-	if a.cfg.DefaultPage != "oa" || a.cfg.RememberWindow || !a.cfg.CloseToTray || len(a.cfg.CAs) != 1 {
+	if a.cfg.DefaultPage != "oa" || a.cfg.RememberWindow || !a.cfg.MinimizeToTray || len(a.cfg.CAs) != 1 {
 		t.Fatalf("settings/cas: %+v", a.cfg)
 	}
 	// imported records are live in the resolver

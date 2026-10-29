@@ -49,7 +49,7 @@ type Config struct {
 	// DefaultPage: "home" (favorites overview), "last" (last opened bookmark) or a bookmark ID.
 	DefaultPage    string       `json:"defaultPage"`
 	RememberWindow bool         `json:"rememberWindow"`
-	CloseToTray    bool         `json:"closeToTray"` // closing the last window hides it in the tray
+	MinimizeToTray bool         `json:"minimizeToTray"` // a minimized window hides in the tray
 	Window         *WindowState `json:"window,omitempty"`
 	LastBookmark   string       `json:"lastBookmark,omitempty"`
 	CAs            []CA         `json:"cas"`

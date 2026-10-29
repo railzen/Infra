@@ -34,7 +34,7 @@ type inMsg struct {
 	Open           bool             `json:"open"`
 	DefaultPage    string           `json:"defaultPage"`
 	RememberWindow bool             `json:"rememberWindow"`
-	CloseToTray    bool             `json:"closeToTray"`
+	MinimizeToTray bool             `json:"minimizeToTray"`
 	Name           string           `json:"name"`
 	Data           string           `json:"data"`
 	URL            string           `json:"url"`
@@ -164,7 +164,7 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		}
 		a.cfg.DefaultPage = dp
 		a.cfg.RememberWindow = m.RememberWindow
-		a.cfg.CloseToTray = m.CloseToTray
+		a.cfg.MinimizeToTray = m.MinimizeToTray
 		if !m.RememberWindow {
 			a.cfg.Window = nil
 			for i := range a.cfg.Bookmarks {
@@ -286,7 +286,7 @@ func (a *App) mergeImport(e *config.ExportFormat) (added, updated, cas, skipped 
 		}
 	}
 	a.cfg.RememberWindow = e.Settings.RememberWindow
-	a.cfg.CloseToTray = e.Settings.CloseToTray
+	a.cfg.MinimizeToTray = e.Settings.MinimizeToTray
 	if dp := e.Settings.DefaultPage; dp == "home" || dp == "last" || a.cfg.Bookmark(dp) != nil {
 		a.cfg.DefaultPage = dp
 	}

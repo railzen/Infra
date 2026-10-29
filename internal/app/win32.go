@@ -17,6 +17,7 @@ var (
 	pDefWindowProcW           = user32.NewProc("DefWindowProcW")
 	pShowWindow               = user32.NewProc("ShowWindow")
 	pGetMessageW              = user32.NewProc("GetMessageW")
+	pPeekMessageW             = user32.NewProc("PeekMessageW")
 	pTranslateMessage         = user32.NewProc("TranslateMessage")
 	pDispatchMessageW         = user32.NewProc("DispatchMessageW")
 	pPostMessageW             = user32.NewProc("PostMessageW")
@@ -64,6 +65,8 @@ var (
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
 	pShellExecuteW            = shell32.NewProc("ShellExecuteW")
 )
+
+var pMsgWaitForMultipleObjectsEx = user32.NewProc("MsgWaitForMultipleObjectsEx")
 
 const (
 	wmNull          = 0x0000
@@ -131,6 +134,8 @@ const (
 	scBookmarkSep  = 0x0FF0
 
 	waInactive = 0
+
+	sizeMinimized = 1
 )
 
 // copyDataStruct matches COPYDATASTRUCT. The padding between Size and Ptr is

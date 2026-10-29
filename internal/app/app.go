@@ -47,8 +47,9 @@ type App struct {
 	msgHwnd uintptr // message-only window that runs posted functions
 	windows []*Window
 
-	qmu   sync.Mutex
-	queue []func()
+	qmu        sync.Mutex
+	queue      []func()
+	queueEvent windows.Handle // set by post; see messageLoop
 
 	saver        *saver
 	bookmarkCmds []string // system-menu command index -> bookmark id
@@ -56,7 +57,6 @@ type App struct {
 	trayHwnd  uintptr // hidden owner of the notification-area icon
 	trayIcon  uintptr
 	trayShown bool
-	quitting  bool // "quit" from the tray: closing must not hide to the tray
 }
 
 var theApp *App // window procedures need a way back to the App
@@ -169,17 +169,37 @@ func Run(version string) {
 		w.showPage("home", "")
 	}
 
+	a.messageLoop()
+}
+
+// messageLoop runs until WM_QUIT. Besides window messages it waits on
+// queueEvent: WebView2's in-process message pump sometimes removes a
+// wmAppCall it does not own without dispatching it, and the event makes sure
+// queued work still runs. Nested loops (menus, dialogs) rely on wmAppCall.
+func (a *App) messageLoop() {
+	const (
+		pmRemove           = 1
+		qsAllInput         = 0x04FF
+		mwmoInputAvailable = 0x0004
+		wmQuit             = 0x0012
+		infinite           = 0xFFFFFFFF
+	)
 	var m msg
 	for {
-		r, _, _ := pGetMessageW.Call(ptr(&m), 0, 0, 0)
-		if int32(r) <= 0 {
-			break
+		for {
+			r, _, _ := pPeekMessageW.Call(ptr(&m), 0, 0, 0, pmRemove)
+			if r == 0 {
+				break
+			}
+			if m.Message == wmQuit {
+				return
+			}
+			pTranslateMessage.Call(ptr(&m))
+			pDispatchMessageW.Call(ptr(&m))
 		}
-		pTranslateMessage.Call(ptr(&m))
-		pDispatchMessageW.Call(ptr(&m))
-		// WebView2's in-process message pump sometimes removes a wmAppCall it
-		// does not own without dispatching it; run whatever that left queued.
 		a.runQueue()
+		ev := a.queueEvent
+		pMsgWaitForMultipleObjectsEx.Call(1, uintptr(unsafe.Pointer(&ev)), infinite, qsAllInput, mwmoInputAvailable)
 	}
 }
 
@@ -222,13 +242,7 @@ func (a *App) openFromExternal(id string) {
 		return
 	}
 	if !isVisible(from.hwnd) {
-		if from.closedToTray {
-			// the last window was closed into the tray: reuse it for the link
-			a.openHere(from, id)
-			from.activate()
-			return
-		}
-		a.showFromTray()
+		a.showFromTray() // the windows are in the tray
 	}
 	a.open(from, id)
 }
@@ -278,6 +292,11 @@ func (a *App) createMessageWindow() error {
 		return err
 	}
 	a.msgHwnd = h
+	ev, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		return err
+	}
+	a.queueEvent = ev
 	return nil
 }
 
@@ -286,6 +305,7 @@ func (a *App) post(fn func()) {
 	a.qmu.Lock()
 	a.queue = append(a.queue, fn)
 	a.qmu.Unlock()
+	windows.SetEvent(a.queueEvent)
 	pPostMessageW.Call(a.msgHwnd, wmAppCall, 0, 0)
 }
 
@@ -494,7 +514,7 @@ type stateMsg struct {
 	Settings  struct {
 		DefaultPage    string `json:"defaultPage"`
 		RememberWindow bool   `json:"rememberWindow"`
-		CloseToTray    bool   `json:"closeToTray"`
+		MinimizeToTray bool   `json:"minimizeToTray"`
 	} `json:"settings"`
 	Current   *siteState `json:"current"`
 	Page      string     `json:"page"`
@@ -528,7 +548,7 @@ func (a *App) baseState() *stateMsg {
 	}
 	s.Settings.DefaultPage = a.cfg.DefaultPage
 	s.Settings.RememberWindow = a.cfg.RememberWindow
-	s.Settings.CloseToTray = a.cfg.CloseToTray
+	s.Settings.MinimizeToTray = a.cfg.MinimizeToTray
 	s.Info.Version = a.version
 	s.Info.RootCount = netx.BuiltinRootCount()
 	s.Info.BundleDate = netx.BundleDate()

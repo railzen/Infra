@@ -185,11 +185,14 @@ func (a *App) toggleFromTray() {
 // restores minimized ones, and activates one of them.
 func (a *App) showFromTray() {
 	for _, w := range a.windows {
-		switch {
-		case w.closing:
-		case !isVisible(w.hwnd):
+		if w.closing {
+			continue
+		}
+		if !isVisible(w.hwnd) {
 			pShowWindow.Call(w.hwnd, swShowNA)
-		case isIconic(w.hwnd):
+		}
+		// a window minimized into the tray comes back minimized
+		if isIconic(w.hwnd) {
 			pShowWindow.Call(w.hwnd, swShowNoActivate)
 		}
 	}
@@ -198,16 +201,11 @@ func (a *App) showFromTray() {
 	}
 }
 
-// hidesOnClose reports whether closing a window should hide it in the tray:
-// only the last window is kept, and only while its tray icon exists to bring
-// it back.
-func (a *App) hidesOnClose() bool {
-	return a.cfg.CloseToTray && !a.quitting && a.trayShown && len(a.windows) == 1
-}
+// minimizesToTray reports whether a minimized window should leave the
+// taskbar for the tray, which needs the tray icon to bring it back.
+func (a *App) minimizesToTray() bool { return a.cfg.MinimizeToTray && a.trayShown }
 
-// quit closes every window for real, even when closing would hide to the tray.
 func (a *App) quit() {
-	a.quitting = true
 	if len(a.windows) == 0 {
 		pPostQuitMessage.Call(0)
 		return
