@@ -1,6 +1,7 @@
 package netx
 
 import (
+	"bufio"
 	"crypto/tls"
 	"crypto/x509"
 	"io"
@@ -71,6 +72,32 @@ func TestCustomDNSAndCA(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 200 || !strings.HasPrefix(string(body), "hello from") {
 		t.Fatalf("expected success, got %d %q", resp.StatusCode, body)
+	}
+}
+
+// An absolute https:// request must not reach the reverse proxy, whose
+// transport would verify the upstream with the system roots.
+func TestAbsoluteHTTPSNotForwarded(t *testing.T) {
+	hits := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++ }))
+	defer upstream.Close()
+	p, err := Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "GET "+upstream.URL+"/ HTTP/1.1\r\nHost: "+upstream.Listener.Addr().String()+"\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || hits != 0 {
+		t.Fatalf("status %d, upstream hits %d", resp.StatusCode, hits)
 	}
 }
 

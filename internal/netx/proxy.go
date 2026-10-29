@@ -63,7 +63,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodConnect:
 		p.handleConnect(w, r)
-	case r.URL.IsAbs():
+	case r.URL.IsAbs() && r.URL.Scheme == "http":
+		// only plain http: rp's transport would verify https with the system roots
 		p.rp.ServeHTTP(w, r)
 	default:
 		http.Error(w, "Intra proxy", http.StatusNotFound)
