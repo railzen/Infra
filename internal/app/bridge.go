@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,9 +28,10 @@ type inMsg struct {
 	Kind           string           `json:"kind"`
 	Page           string           `json:"page"`
 	Arg            string           `json:"arg"`
+	Back           string           `json:"back"`
 	ID             string           `json:"id"`
 	Action         string           `json:"action"`
-	Dir            int              `json:"dir"`
+	Index          int              `json:"index"`
 	Bookmark       *config.Bookmark `json:"bookmark"`
 	Open           bool             `json:"open"`
 	DefaultPage    string           `json:"defaultPage"`
@@ -95,6 +97,8 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		w.menu.sized(m.Kind, m.H)
 	case "menuClose":
 		w.menu.hide()
+	case "panel":
+		w.menu.openPanel(m.Kind, m.Arg)
 
 	// --- navigation ---
 	case "show":
@@ -126,14 +130,16 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		a.pushAll()
 	case "navigate":
 		// typed into the address field of the links dropdown
-		w.menu.hide()
 		if w.cur != nil {
 			if u, ok := addressURL(m.URL); ok {
+				w.menu.hide()
 				w.showPage("", "")
 				w.site.Navigate(u)
 			} else {
-				w.toast("只支持 http 和 https 地址", "err")
+				w.toast("只支持 http 和 https 地址", "err") // the dropdown stays open to show it
 			}
+		} else {
+			w.menu.hide()
 		}
 	case "nav":
 		if w.cur == nil || w.siteWV == 0 {
@@ -152,11 +158,11 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 
 	// --- data ---
 	case "saveBookmark":
-		a.saveBookmark(w, m.Bookmark, m.Open)
+		a.saveBookmark(w, m.Bookmark, m.Open, m.Back)
 	case "deleteBookmark":
-		a.deleteBookmark(w, m.ID)
+		a.deleteBookmark(w, m.ID, m.Back)
 	case "moveBookmark":
-		a.moveBookmark(m.ID, m.Dir)
+		a.moveBookmark(m.ID, m.Index)
 	case "settings":
 		dp := m.DefaultPage
 		if dp != "home" && dp != "last" && a.cfg.Bookmark(dp) == nil {
@@ -342,7 +348,9 @@ func validateBookmark(b *config.Bookmark) error {
 	return nil
 }
 
-func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
+// saveBookmark is the save button of the floating link editor. Afterwards the
+// editor returns to the panel it came from (back), or closes.
+func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool, back string) {
 	if b == nil {
 		return
 	}
@@ -366,27 +374,42 @@ func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
 	}
 	a.applyRecords()
 	a.save()
-	w.toast("已保存", "ok")
 	if open {
-		// leave the editor; a window already showing a site gets a new one
-		if w.cur != nil {
-			w.showPage("", "")
-		}
-		a.open(w, b.ID)
+		// a window already showing a site gets a new one; opening may move
+		// and resize windows, so leave the webview callback first
+		w.menu.hide()
+		id := b.ID
+		a.post(func() {
+			if !w.closing {
+				a.open(w, id)
+			}
+		})
 	} else {
-		w.showPage("bookmarks", "")
+		w.leaveEditor(back)
 	}
+	w.toast("已保存", "ok")
 	a.pushAll()
 	a.syncLinkShortcuts()
 }
 
 // deleteBookmark is the delete button of the link editor.
-func (a *App) deleteBookmark(w *Window, id string) {
-	if a.removeBookmark(id) {
+func (a *App) deleteBookmark(w *Window, id, back string) {
+	ok := a.removeBookmark(id)
+	w.leaveEditor(back)
+	if ok {
 		w.toast("已删除", "ok")
 	}
-	w.showPage("bookmarks", "")
 	a.pushAll()
+}
+
+// leaveEditor returns from the link editor to the link manager it was opened
+// from, or closes it.
+func (w *Window) leaveEditor(back string) {
+	if back == "bookmarks" {
+		w.menu.openPanel("bookmarks", "")
+	} else {
+		w.menu.hide()
+	}
 }
 
 // removeBookmark deletes a link and sends windows showing it back to the home page.
@@ -419,20 +442,23 @@ func (a *App) removeBookmark(id string) bool {
 	return true
 }
 
-func (a *App) moveBookmark(id string, dir int) {
+// moveBookmark puts a link at position to, where it was dropped in the link manager.
+func (a *App) moveBookmark(id string, to int) {
 	bs := a.cfg.Bookmarks
-	for i := range bs {
-		if bs[i].ID == id {
-			j := i + dir
-			if j >= 0 && j < len(bs) {
-				bs[i], bs[j] = bs[j], bs[i]
-				a.save()
-				a.pushAll()
-				a.syncLinkShortcuts()
-			}
-			return
-		}
+	from := slices.IndexFunc(bs, func(b config.Bookmark) bool { return b.ID == id })
+	if from < 0 || to < 0 || to >= len(bs) || to == from {
+		return
 	}
+	b := bs[from]
+	if from < to {
+		copy(bs[from:to], bs[from+1:to+1])
+	} else {
+		copy(bs[to+1:from+1], bs[to:from])
+	}
+	bs[to] = b
+	a.save()
+	a.pushAll()
+	a.syncLinkShortcuts()
 }
 
 func (a *App) addCA(w *Window, name, data string) {

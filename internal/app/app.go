@@ -521,6 +521,7 @@ type stateMsg struct {
 	PageArg   string     `json:"pageArg"`
 	MenuOpen  bool       `json:"menuOpen"`
 	MenuKind  string     `json:"menuKind"`
+	MenuArg   string     `json:"menuArg"`
 	Maximized bool       `json:"maximized"`
 	Active    bool       `json:"active"`
 	Info      struct {

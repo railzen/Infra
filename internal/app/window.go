@@ -513,7 +513,7 @@ func (w *Window) state() *stateMsg {
 	s := w.a.baseState()
 	s.Current, s.Page, s.PageArg, s.Active = w.cur, w.page, w.pageArg, w.active
 	if w.menu != nil {
-		s.MenuOpen, s.MenuKind = w.menu.open, w.menu.kind
+		s.MenuOpen, s.MenuKind, s.MenuArg = w.menu.open, w.menu.kind, w.menu.arg
 	}
 	s.Maximized = w.hwnd != 0 && isZoomed(w.hwnd)
 	return s
@@ -548,6 +548,9 @@ func (w *Window) toast(text, kind string) {
 	if w.menu != nil && w.menu.open && w.menu.ready {
 		w.menu.wv.Eval(script)
 		return
+	}
+	if w.page == "" && w.cur != nil {
+		return // it would be clipped to the bar
 	}
 	w.ui.Eval(script)
 }

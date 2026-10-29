@@ -12,11 +12,14 @@ import (
 )
 
 // dropdown widths in DIPs, by kind
-var popupWidths = map[string]float64{"links": 320, "settings": 420, "about": 340}
+var popupWidths = map[string]float64{"links": 320, "settings": 420, "about": 340, "bookmarks": 520, "edit": 480}
 
-// popup hosts the title bar dropdowns (links, settings, about). It is a
-// separate owned top-level window so it can overlap the site webview, which a
-// DOM element in the bar could not.
+// panels that float centered below the title bar instead of hanging from a menu button
+var centeredPanels = map[string]bool{"bookmarks": true, "edit": true}
+
+// popup hosts the title bar dropdowns (links, settings, about) and the
+// floating link manager and editor. It is a separate owned top-level window
+// so it can overlap the site webview, which a DOM element in the bar could not.
 type popup struct {
 	w         *Window
 	hwnd      uintptr
@@ -24,7 +27,9 @@ type popup struct {
 	ready     bool
 	open      bool
 	kind      string // which dropdown the content currently shows
+	arg       string // the link the editor panel shows, "" for a new one
 	pending   bool   // open requested, waiting for the content to report its height
+	switching bool   // hidden on purpose to change panels; not a dismissal
 	lastKind  string // kind of the most recently hidden dropdown
 	hiddenAt  time.Time
 	heightCSS float64
@@ -83,7 +88,7 @@ func (p *popup) toggle(kind string, xCSS, yCSS float64) {
 	if p.hwnd == 0 || !p.ready {
 		return
 	}
-	if _, ok := popupWidths[kind]; !ok {
+	if _, ok := popupWidths[kind]; !ok || centeredPanels[kind] {
 		return
 	}
 	if p.open && kind == p.kind {
@@ -99,19 +104,42 @@ func (p *popup) toggle(kind string, xCSS, yCSS float64) {
 	p.anchor = point{int32(math.Round(xCSS * s)), int32(math.Round((yCSS + 4) * s))}
 	p.open = true
 	if kind != p.kind {
-		// let the page render the new panel and report its height first, so
-		// the window never flashes at the previous dropdown's size
-		p.kind = kind
-		p.pending = true
-		pShowWindow.Call(p.hwnd, swHide)
-		// lay the content out at the new width before it measures its height
-		w := int32(popupWidths[kind] * s)
-		pSetWindowPos.Call(p.hwnd, 0, 0, 0, uintptr(w), uintptr(int32(p.heightCSS*s)), swpNoMove|swpNoZOrder|swpNoActivate)
-		p.wv.Resize()
-		p.w.push()
+		p.relayout(kind)
 		return
 	}
 	p.show()
+	p.w.push()
+}
+
+// openPanel shows the link manager or editor, also when switching to it from
+// another panel of this popup.
+func (p *popup) openPanel(kind, arg string) {
+	if p.hwnd == 0 || !p.ready || !centeredPanels[kind] {
+		return
+	}
+	p.arg = arg
+	if p.open && kind == p.kind {
+		p.w.push()
+		return
+	}
+	p.open = true
+	// always re-measured: the content is rendered afresh every time it opens
+	p.relayout(kind)
+}
+
+// relayout lets the page render a new panel and report its height before the
+// window shows it, so it never flashes at the previous panel's size.
+func (p *popup) relayout(kind string) {
+	s := p.w.scale()
+	p.kind = kind
+	p.pending = true
+	p.switching = true
+	pShowWindow.Call(p.hwnd, swHide)
+	p.switching = false
+	// lay the content out at the new width before it measures its height
+	w := int32(popupWidths[kind] * s)
+	pSetWindowPos.Call(p.hwnd, 0, 0, 0, uintptr(w), uintptr(int32(p.heightCSS*s)), swpNoMove|swpNoZOrder|swpNoActivate)
+	p.wv.Resize()
 	p.w.push()
 }
 
@@ -126,16 +154,19 @@ func (p *popup) show() {
 
 func (p *popup) place() {
 	s := p.w.scale()
-	pt := p.anchor
-	pClientToScreen.Call(p.w.hwnd, ptr(&pt))
 	w := int32(popupWidths[p.kind] * s)
 	h := int32(math.Ceil(p.heightCSS * s))
+	pt := p.anchor
+	if centeredPanels[p.kind] {
+		pt = point{(clientRect(p.w.hwnd).W() - w) / 2, p.w.barPx() + int32(8*s)}
+	}
+	pClientToScreen.Call(p.w.hwnd, ptr(&pt))
 	mon, _, _ := pMonitorFromWindow.Call(p.w.hwnd, 2 /*MONITOR_DEFAULTTONEAREST*/)
 	mi := monitorInfo{}
 	mi.Size = uint32(unsafe.Sizeof(mi))
 	pGetMonitorInfoW.Call(mon, ptr(&mi))
 	h = min(h, mi.Work.Bottom-pt.Y-int32(8*s))
-	x := min(pt.X, mi.Work.Right-w-int32(4*s))
+	x := max(min(pt.X, mi.Work.Right-w-int32(4*s)), mi.Work.Left+int32(4*s))
 	pSetWindowPos.Call(p.hwnd, 0, uintptr(x), uintptr(pt.Y), uintptr(w), uintptr(max(h, int32(40*s))), swpNoActivate)
 }
 
@@ -192,7 +223,7 @@ func popupWndProc(hwnd, m, wp, lp uintptr) uintptr {
 	}
 	switch m {
 	case wmActivate:
-		if wp&0xffff == waInactive && !ownedBy(lp, hwnd) {
+		if wp&0xffff == waInactive && !ownedBy(lp, hwnd) && !p.switching {
 			p.hide()
 		}
 	case wmSize:

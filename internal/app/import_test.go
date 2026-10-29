@@ -114,6 +114,37 @@ func TestRemoveBookmark(t *testing.T) {
 	}
 }
 
+func TestMoveBookmark(t *testing.T) {
+	store := config.NewStore(filepath.Join(t.TempDir(), "config.json"))
+	a := &App{store: store, cfg: config.Default()}
+	a.saver = newSaver(store, func(err error) { t.Error(err) })
+	order := func() (s string) {
+		for _, b := range a.cfg.Bookmarks {
+			s += b.ID
+		}
+		return
+	}
+	for _, id := range []string{"a", "b", "c", "d"} {
+		a.cfg.Bookmarks = append(a.cfg.Bookmarks, config.Bookmark{ID: id, Name: id, URL: "https://" + id})
+	}
+	for _, c := range []struct {
+		id   string
+		to   int
+		want string
+	}{
+		{"a", 2, "bcad"}, // down
+		{"d", 0, "dbca"}, // up
+		{"b", 3, "dcab"}, // to the end
+		{"b", 9, "dcab"}, // out of range: ignored
+		{"x", 0, "dcab"}, // unknown: ignored
+	} {
+		a.moveBookmark(c.id, c.to)
+		if got := order(); got != c.want {
+			t.Fatalf("move %s to %d: got %s, want %s", c.id, c.to, got, c.want)
+		}
+	}
+}
+
 func TestAddressURL(t *testing.T) {
 	ok := map[string]string{
 		"https://oa.corp/a?b=1": "https://oa.corp/a?b=1",

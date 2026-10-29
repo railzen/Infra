@@ -275,6 +275,29 @@ select.input.sm { width: 172px; height: 28px; font-size: 12.5px; border-radius: 
 .dd-foot .dd-item { color: var(--secondary); }
 .dd-foot .dd-item:hover { color: var(--fg); }
 .dd-empty { padding: 18px 10px 14px; text-align: center; color: var(--tertiary); font-size: 13px; }
+/* floating link manager and editor */
+.dd.dd-bookmarks, .dd.dd-edit { padding: 14px 16px 16px; }
+.pn-head { display: flex; align-items: center; gap: 8px; min-height: 28px; margin-bottom: 12px; }
+.pn-head .back { margin-left: -6px; }
+.pn-title { flex: 1; font-size: 15px; font-weight: 600; }
+.dd-bookmarks .pp-row { padding: 6px 4px 6px 6px; gap: 8px; border-radius: 8px; }
+.dd-bookmarks .pp-row:hover { background: var(--hover); }
+.dd-bookmarks .pp-row .tool { width: 26px; height: 26px; }
+.dd-edit .field { margin-bottom: 12px; }
+.dd-edit .section { margin-bottom: 16px; }
+.dd-edit .section > h2 { margin-bottom: 6px; }
+.dd-edit .section > p.hint { margin-top: 0; font-size: 12px; }
+.dd-edit .actions { margin-top: 18px; }
+/* drag to reorder (link manager) */
+.sort-row { cursor: grab; touch-action: none; }
+.grip { color: var(--tertiary); opacity: .45; display: grid; place-items: center; margin-right: -4px; }
+.sort-row:hover .grip { opacity: 1; }
+.sort-active > .sort-row { transition: transform .15s ease; }
+.sort-active > .sort-row.dragging { position: relative; z-index: 2; transition: none; background: var(--elevated); box-shadow: var(--shadow); border-radius: var(--radius-md); }
+.sort-active > .sort-row.dragging.settling { transition: transform .16s ease; }
+body.sorting .sort-row:hover:not(.dragging) { background: none; }
+body.sorting .sort-row:not(.dragging) .grip { opacity: .45; }
+body.sorting, body.sorting * { cursor: grabbing !important; }
 </style>
 </head>
 <body>
@@ -296,8 +319,7 @@ const I = {
   stop: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
   edit: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg>',
   trash: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4 4.5l.6 8.5h6.8l.6-8.5"/></svg>',
-  up: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10l4-4 4 4"/></svg>',
-  down: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>',
+  grip: '<svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor"><circle cx="3" cy="3" r="1.2"/><circle cx="7" cy="3" r="1.2"/><circle cx="3" cy="7" r="1.2"/><circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="11" r="1.2"/><circle cx="7" cy="11" r="1.2"/></svg>',
   plus: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
   copy: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg>',
   list: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>',
@@ -312,7 +334,9 @@ const I = {
 let S = { bookmarks: [], cas: [], settings: {}, info: {}, current: null, page: "", pageArg: "" };
 let pageKey = null;        // key of the page currently in the DOM
 let draft = null;          // bookmark being edited
+let draftFor = null;       // id the draft was started from ("" for a new link)
 let draftErrors = {};
+let editBack = "";         // panel the link editor returns to ("bookmarks" or "")
 let confirmDel = null;
 
 function hostOf(u) {
@@ -426,14 +450,16 @@ function setupMain() {
 }
 
 function show(page, arg = "") { send({ t: "show", page, arg }); }
+// the link manager and editor float over the page instead of replacing it
+function panel(kind, arg = "") { send({ t: "panel", kind, arg }); }
 
-const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹", edit: "编辑网站" };
+const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹" };
 
 function renderBar() {
   document.body.classList.toggle("maximized", !!S.maximized);
   document.body.classList.toggle("inactive", S.active === false);
   const open = (k) => !!S.menuOpen && S.menuKind === k;
-  $("#m-fav").classList.toggle("sel", open("links") || (!S.menuOpen && ["home", "bookmarks", "edit"].includes(S.page)));
+  $("#m-fav").classList.toggle("sel", open("links") || open("bookmarks") || open("edit") || (!S.menuOpen && ["home", "bookmarks"].includes(S.page)));
   $("#m-set").classList.toggle("sel", open("settings"));
   $("#m-about").classList.toggle("sel", open("about"));
   const c = S.current;
@@ -453,15 +479,14 @@ function renderBar() {
   $("#title").innerHTML = title;
 }
 
-function renderMain(force) {
+function renderMain() {
   renderBar();
+  if (sorting) return;
   const key = S.page + ":" + S.pageArg;
   const el = $("#page");
   if (!S.page || !PAGES[S.page]) { el.innerHTML = ""; pageKey = null; return; }
   const changed = pageKey !== key;
-  if (changed) { confirmDel = null; if (S.page === "edit") startDraft(S.pageArg); pageKey = key; }
-  // the edit form owns its inputs; never clobber them on background state pushes
-  if (S.page === "edit" && !changed && !force) return;
+  if (changed) pageKey = key;
   const scroll = changed ? 0 : ($("#scroller")?.scrollTop || 0);
   el.innerHTML = `<div class="page" id="scroller"><div class="page-inner">${PAGES[S.page]()}</div></div>`;
   $("#scroller").scrollTop = scroll;
@@ -474,7 +499,8 @@ function backBtn(to = "") {
 }
 function bindCommon() {
   document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => show(b.dataset.go, b.dataset.arg || "")));
-  document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = (e) => { if (!e.target.closest("[data-go]")) send({ t: "open", id: b.dataset.open }); }));
+  document.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => panel("edit", b.dataset.edit)));
+  document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = (e) => { if (!e.target.closest("[data-go],[data-edit]")) send({ t: "open", id: b.dataset.open }); }));
 }
 
 const PAGES = {
@@ -485,7 +511,7 @@ const PAGES = {
         <div class="art">${I.globe}</div>
         <h2>添加你的第一个网站</h2>
         <p>Intra 把网站当作独立应用打开。你可以为每个网站自定义名称、网址和 DNS 记录（A / CNAME），访问内网服务无需修改 hosts。</p>
-        <button class="btn primary" data-go="edit" data-arg="">${I.plus}添加网站</button>
+        <button class="btn primary" data-edit="">${I.plus}添加网站</button>
       </div>`;
     return `
       <div class="hero">${LOGO}<div><h1>收藏夹</h1><p>${bs.length} 个网站 · 点击打开，悬停可编辑</p></div>
@@ -495,9 +521,9 @@ const PAGES = {
           <button class="tile" data-open="${esc(b.id)}">
             ${avatar(b, "lg")}
             <div><div class="name trunc">${esc(b.name)}</div><div class="host trunc">${esc(hostOf(b.url))}</div></div>
-            <span class="tool edit" data-go="edit" data-arg="${esc(b.id)}" title="编辑">${I.edit}</span>
+            <span class="tool edit" data-edit="${esc(b.id)}" title="编辑">${I.edit}</span>
           </button>`).join("")}
-        <button class="tile add" data-go="edit" data-arg="">${I.plus}添加网站</button>
+        <button class="tile add" data-edit="">${I.plus}添加网站</button>
       </div>`;
   },
 
@@ -505,64 +531,70 @@ const PAGES = {
     const bs = S.bookmarks;
     return `
       <div class="page-head">${backBtn("home")}<h1>管理收藏夹</h1>
-        <button class="btn primary sm" data-go="edit" data-arg="">${I.plus}添加网站</button></div>
+        <button class="btn primary sm" data-edit="">${I.plus}添加网站</button></div>
       <div class="card">
-        ${bs.length ? bs.map((b, i) => `
-          <div class="row">
+        ${bs.length ? bs.map((b) => `
+          <div class="row sort-row" data-sort="${esc(b.id)}">
+            <span class="grip" title="拖动调整顺序">${I.grip}</span>
             ${avatar(b)}
             <div class="grow"><div class="label trunc">${esc(b.name)}</div><div class="desc trunc">${esc(b.url)}</div></div>
             ${b.records?.length ? `<span class="badge">${b.records.length} 条 DNS 记录</span>` : ""}
             <button class="btn sm" data-open="${esc(b.id)}">打开</button>
-            <button class="tool" data-go="edit" data-arg="${esc(b.id)}" title="编辑">${I.edit}</button>
-            <button class="tool" data-move="${esc(b.id)}" data-dir="-1" ${i === 0 ? "disabled" : ""} title="上移">${I.up}</button>
-            <button class="tool" data-move="${esc(b.id)}" data-dir="1" ${i === bs.length - 1 ? "disabled" : ""} title="下移">${I.down}</button>
+            <button class="tool" data-edit="${esc(b.id)}" title="编辑">${I.edit}</button>
           </div>`).join("") : `<div class="empty-row">还没有网站</div>`}
       </div>`;
   },
 
-  edit() {
-    const d = draft, e = draftErrors;
-    const host = hostOf(d.url || "");
-    const suggest = host && !d.records.some((r) => r.host.trim().toLowerCase() === host.split(":")[0].toLowerCase());
-    return `
-      <div class="page-head">${backBtn("bookmarks")}<h1>${d.id ? "编辑网站" : "添加网站"}</h1></div>
-      <div class="section">
-        <label class="field"><span>名称</span>
-          <input class="input ${e.name ? "bad" : ""}" id="f-name" value="${esc(d.name)}" placeholder="例如：办公系统" maxlength="60" spellcheck="false">
-          ${e.name ? `<div class="err">${esc(e.name)}</div>` : ""}</label>
-        <label class="field"><span>网址</span>
-          <input class="input ${e.url ? "bad" : ""}" id="f-url" value="${esc(d.url)}" placeholder="https://oa.example.local" spellcheck="false">
-          ${e.url ? `<div class="err">${esc(e.url)}</div>` : ""}</label>
-      </div>
-      <div class="section">
-        <h2>DNS 记录</h2>
-        <p class="hint">在 Intra 内访问这些主机名时使用下列记录，优先于系统 DNS。支持通配符，如 *.corp.local。</p>
-        <div id="recs">
-          ${d.records.length ? `<div class="rec-head"><span>主机名</span><span>类型</span><span>值</span><span></span></div>` : ""}
-          ${d.records.map((r, i) => `
-            <div class="rec" data-i="${i}">
-              <input class="input ${e["r" + i + "h"] ? "bad" : ""}" data-k="host" value="${esc(r.host)}" placeholder="oa.example.local" spellcheck="false">
-              <select class="input" data-k="type"><option ${r.type === "A" ? "selected" : ""}>A</option><option ${r.type === "CNAME" ? "selected" : ""}>CNAME</option></select>
-              <input class="input ${e["r" + i + "v"] ? "bad" : ""}" data-k="value" value="${esc(r.value)}" placeholder="${r.type === "CNAME" ? "目标主机名" : "IPv4 / IPv6 地址"}" spellcheck="false">
-              <button class="tool danger" data-delrec="${i}" title="删除记录">${I.trash}</button>
-            </div>
-            ${e["r" + i] ? `<div class="err" style="margin:-4px 0 8px">${esc(e["r" + i])}</div>` : ""}`).join("")}
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
-          <button class="chip" id="addrec">${I.plus}添加记录</button>
-          ${suggest ? `<button class="chip" id="sugrec">${I.plus}为 ${esc(host.split(":")[0])} 添加 A 记录</button>` : ""}
-        </div>
-      </div>
-      <div class="actions">
-        ${d.id ? `<button class="btn danger ${confirmDel === d.id ? "confirm" : ""}" id="del">${confirmDel === d.id ? "确认删除" : "删除"}</button>` : ""}
-        <span class="sp"></span>
-        <button class="btn" data-go="bookmarks">取消</button>
-        <button class="btn" id="save">保存</button>
-        <button class="btn primary" id="saveopen">保存并打开</button>
-      </div>`;
-  },
-
 };
+
+// the floating link editor (popup panel "edit")
+function editHTML() {
+  const d = draft, e = draftErrors;
+  const host = hostOf(d.url || "");
+  const suggest = host && !d.records.some((r) => r.host.trim().toLowerCase() === host.split(":")[0].toLowerCase());
+  return `
+    <div class="pn-head">${editBack ? `<button class="back" id="ed-back">${I.back}<span>收藏夹</span></button>` : ""}
+      <div class="pn-title">${d.id ? "编辑网站" : "添加网站"}</div></div>
+    <div class="section">
+      <label class="field"><span>名称</span>
+        <input class="input ${e.name ? "bad" : ""}" id="f-name" value="${esc(d.name)}" placeholder="例如：办公系统" maxlength="60" spellcheck="false">
+        ${e.name ? `<div class="err">${esc(e.name)}</div>` : ""}</label>
+      <label class="field"><span>网址</span>
+        <input class="input ${e.url ? "bad" : ""}" id="f-url" value="${esc(d.url)}" placeholder="https://oa.example.local" spellcheck="false">
+        ${e.url ? `<div class="err">${esc(e.url)}</div>` : ""}</label>
+    </div>
+    <div class="section">
+      <h2>DNS 记录</h2>
+      <p class="hint">在 Intra 内访问这些主机名时使用下列记录，优先于系统 DNS。支持通配符，如 *.corp.local。</p>
+      <div id="recs">
+        ${d.records.length ? `<div class="rec-head"><span>主机名</span><span>类型</span><span>值</span><span></span></div>` : ""}
+        ${d.records.map((r, i) => `
+          <div class="rec" data-i="${i}">
+            <input class="input ${e["r" + i + "h"] ? "bad" : ""}" data-k="host" value="${esc(r.host)}" placeholder="oa.example.local" spellcheck="false">
+            <select class="input" data-k="type"><option ${r.type === "A" ? "selected" : ""}>A</option><option ${r.type === "CNAME" ? "selected" : ""}>CNAME</option></select>
+            <input class="input ${e["r" + i + "v"] ? "bad" : ""}" data-k="value" value="${esc(r.value)}" placeholder="${r.type === "CNAME" ? "目标主机名" : "IPv4 / IPv6 地址"}" spellcheck="false">
+            <button class="tool danger" data-delrec="${i}" title="删除记录">${I.trash}</button>
+          </div>
+          ${e["r" + i] ? `<div class="err" style="margin:-4px 0 8px">${esc(e["r" + i])}</div>` : ""}`).join("")}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+        <button class="chip" id="addrec">${I.plus}添加记录</button>
+        ${suggest ? `<button class="chip" id="sugrec">${I.plus}为 ${esc(host.split(":")[0])} 添加 A 记录</button>` : ""}
+      </div>
+    </div>
+    <div class="actions">
+      ${d.id ? `<button class="btn danger ${confirmDel === d.id ? "confirm" : ""}" id="del">${confirmDel === d.id ? "确认删除" : "删除"}</button>` : ""}
+      <span class="sp"></span>
+      <button class="btn" id="ed-cancel">取消</button>
+      <button class="btn" id="save">保存</button>
+      <button class="btn primary" id="saveopen">保存并打开</button>
+    </div>`;
+}
+
+// leaveEdit closes the editor, back to the link manager when it came from there.
+function leaveEdit() {
+  if (editBack) panel(editBack); else send({ t: "menuClose" });
+}
 
 function startDraft(id) {
   const b = S.bookmarks.find((x) => x.id === id);
@@ -576,7 +608,7 @@ function rerenderEdit() {
   const sel = keep && keep.id ? "#" + keep.id : null;
   const recSel = keep?.closest?.(".rec") ? `.rec[data-i="${keep.closest(".rec").dataset.i}"] [data-k="${keep.dataset.k}"]` : null;
   const pos = keep?.selectionStart;
-  renderMain(true);
+  renderMenu(true);
   const el = (recSel && $(recSel)) || (sel && $(sel));
   if (el) { el.focus(); if (pos != null && el.setSelectionRange) try { el.setSelectionRange(pos, pos); } catch {} }
 }
@@ -614,51 +646,158 @@ const BIND = {
   home: bindCommon,
   bookmarks() {
     bindCommon();
-    document.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => send({ t: "moveBookmark", id: b.dataset.move, dir: +b.dataset.dir })));
-  },
-  edit() {
-    bindCommon();
-    $("#f-name").oninput = (e) => (draft.name = e.target.value);
-    $("#f-url").oninput = (e) => { draft.url = e.target.value; };
-    $("#f-url").onchange = () => rerenderEdit();
-    document.querySelectorAll(".rec").forEach((row) => {
-      const r = draft.records[+row.dataset.i];
-      row.querySelectorAll("[data-k]").forEach((inp) => {
-        inp.oninput = () => { r[inp.dataset.k] = inp.value; };
-        if (inp.tagName === "SELECT") inp.onchange = () => { r.type = inp.value; rerenderEdit(); };
-      });
-    });
-    document.querySelectorAll("[data-delrec]").forEach((b) => (b.onclick = () => { draft.records.splice(+b.dataset.delrec, 1); draftErrors = {}; rerenderEdit(); }));
-    $("#addrec").onclick = () => {
-      draft.records.push({ host: draft.records.length ? "" : hostOf(draft.url).split(":")[0], type: "A", value: "" });
-      rerenderEdit();
-      const rows = document.querySelectorAll(".rec");
-      const last = rows[rows.length - 1];
-      last && (last.querySelector('[data-k="host"]').value ? last.querySelector('[data-k="value"]') : last.querySelector('[data-k="host"]')).focus();
-    };
-    const sug = $("#sugrec");
-    if (sug) sug.onclick = () => {
-      draft.records.push({ host: hostOf(draft.url).split(":")[0], type: "A", value: "" });
-      rerenderEdit();
-      const rows = document.querySelectorAll(".rec");
-      rows[rows.length - 1].querySelector('[data-k="value"]').focus();
-    };
-    const save = (open) => {
-      if (!validate()) { rerenderEdit(); return; }
-      const b = { ...draft, name: draft.name.trim(), url: draft.url.trim(),
-        records: draft.records.filter((r) => r.host.trim() || r.value.trim()).map((r) => ({ host: r.host.trim(), type: r.type, value: r.value.trim() })) };
-      send({ t: "saveBookmark", bookmark: b, open });
-    };
-    $("#save").onclick = () => save(false);
-    $("#saveopen").onclick = () => save(true);
-    const del = $("#del");
-    if (del) del.onclick = () => {
-      if (confirmDel === draft.id) send({ t: "deleteBookmark", id: draft.id });
-      else { confirmDel = draft.id; rerenderEdit(); }
-    };
-    if (!draft.id) setTimeout(() => $("#f-name")?.focus(), 0);
+    sortable($(".card"));
   },
 };
+
+// sortable makes the [data-sort] rows of list reorderable by dragging, the way
+// SortableJS / dnd-kit lists behave: the row follows the pointer within the
+// list, the others slide out of its way, the list scrolls near its edges, and
+// on release the row settles into its slot (Esc puts everything back). Rows
+// only move by transform until the drop; then the DOM and S are reordered at
+// once, so a state push arriving before the saved order cannot jump them back.
+let sorting = false;      // a drag is in progress; re-renders would break it
+const SETTLE_MS = 160;
+function scrollParent(el) {
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    if (/auto|scroll/.test(getComputedStyle(p).overflowY)) return p;
+  }
+  // the dropdown's body overflow propagates to the viewport, which then scrolls
+  return document.scrollingElement;
+}
+function sortable(list) {
+  const rowsOf = () => [...list.children].filter((r) => r.dataset.sort);
+  rowsOf().forEach((row) => {
+    row.onpointerdown = (e) => {
+      if (e.button !== 0 || sorting || e.target.closest("button,input")) return;
+      const items = rowsOf(), from = items.indexOf(row), others = items.filter((r) => r !== row);
+      const tops = items.map((r) => r.offsetTop), hs = items.map((r) => r.offsetHeight);
+      const last = items.length - 1;
+      const gap = items.length > 1 ? tops[1] - tops[0] - hs[0] : 0;
+      const sc = scrollParent(list), st0 = sc.scrollTop, y0 = e.clientY;
+      let started = false, done = false, to = from, py = e.clientY, raf = 0;
+      // slot tops when the rows are in this order
+      const slots = (order) => {
+        const m = new Map(); let y = tops[0];
+        for (const r of order) { m.set(r, y); y += hs[items.indexOf(r)] + gap; }
+        return m;
+      };
+      const orderFor = (t) => { const o = [...others]; o.splice(t, 0, row); return o; };
+      const place = () => {
+        // keep the row inside the list: the topmost and bottommost slot
+        const lo = tops[0] - tops[from], hi = tops[last] + hs[last] - hs[from] - tops[from];
+        const dy = Math.max(lo, Math.min(hi, py - y0 + sc.scrollTop - st0));
+        const mid = tops[from] + dy + hs[from] / 2;
+        // held against an end it takes that end, whatever the rows' height differences
+        to = dy <= lo ? 0 : dy >= hi ? others.length
+          : others.filter((r) => { const i = items.indexOf(r); return tops[i] + hs[i] / 2 < mid; }).length;
+        const at = slots(orderFor(to));
+        for (const r of others) r.style.transform = `translateY(${at.get(r) - tops[items.indexOf(r)]}px)`;
+        row.style.transform = `translateY(${dy}px)`;
+      };
+      const tick = () => {
+        // auto-scroll while the pointer is near the top or bottom of the scroller
+        const box = sc === document.scrollingElement ? { top: 0, bottom: innerHeight } : sc.getBoundingClientRect();
+        const edge = 40, over = py < box.top + edge ? py - box.top - edge : py > box.bottom - edge ? py - box.bottom + edge : 0;
+        if (over) { sc.scrollTop += Math.max(-14, Math.min(14, over / 3)); place(); }
+        raf = requestAnimationFrame(tick);
+      };
+      const finish = (commit) => {
+        if (done) return;
+        done = true;
+        cancelAnimationFrame(raf);
+        removeEventListener("keydown", onKey, true);
+        row.onpointermove = row.onpointerup = row.onpointercancel = row.onlostpointercapture = null;
+        if (!started) return;
+        if (!commit) to = from;
+        // settle: the row glides into its slot, the others to their final places
+        const at = slots(orderFor(to));
+        row.classList.add("settling");
+        for (const r of items) r.style.transform = `translateY(${at.get(r) - tops[items.indexOf(r)]}px)`;
+        setTimeout(() => {
+          for (const r of items) { r.style.transition = "none"; r.style.transform = ""; }
+          if (to !== from) for (const r of orderFor(to)) list.appendChild(r);
+          void list.offsetHeight; // apply the reset before transitions return
+          for (const r of items) r.style.transition = "";
+          row.classList.remove("dragging", "settling");
+          list.classList.remove("sort-active");
+          document.body.classList.remove("sorting");
+          sorting = false;
+          if (to !== from) {
+            const [b] = S.bookmarks.splice(from, 1);
+            S.bookmarks.splice(to, 0, b);
+            send({ t: "moveBookmark", id: row.dataset.sort, index: to });
+          } else {
+            render(); // catch up on any state pushed during the drag
+          }
+        }, SETTLE_MS);
+      };
+      const onKey = (ev) => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); finish(false); } };
+      row.setPointerCapture(e.pointerId);
+      row.onpointermove = (ev) => {
+        py = ev.clientY;
+        if (!started) {
+          if (Math.abs(py - y0) < 4) return;
+          started = sorting = true;
+          row.classList.add("dragging"); list.classList.add("sort-active"); document.body.classList.add("sorting");
+          addEventListener("keydown", onKey, true);
+          raf = requestAnimationFrame(tick);
+        }
+        place();
+      };
+      row.onpointerup = () => finish(true);
+      // the capture is also lost when the drag is cut short, e.g. the dropdown closing
+      row.onpointercancel = row.onlostpointercapture = () => finish(false);
+    };
+  });
+}
+
+function bindEdit() {
+  $("#f-name").oninput = (e) => (draft.name = e.target.value);
+  $("#f-url").oninput = (e) => { draft.url = e.target.value; };
+  $("#f-url").onchange = () => rerenderEdit();
+  document.querySelectorAll(".rec").forEach((row) => {
+    const r = draft.records[+row.dataset.i];
+    row.querySelectorAll("[data-k]").forEach((inp) => {
+      inp.oninput = () => { r[inp.dataset.k] = inp.value; };
+      if (inp.tagName === "SELECT") inp.onchange = () => { r.type = inp.value; rerenderEdit(); };
+    });
+  });
+  document.querySelectorAll("[data-delrec]").forEach((b) => (b.onclick = () => { draft.records.splice(+b.dataset.delrec, 1); draftErrors = {}; rerenderEdit(); }));
+  $("#addrec").onclick = () => {
+    draft.records.push({ host: draft.records.length ? "" : hostOf(draft.url).split(":")[0], type: "A", value: "" });
+    rerenderEdit();
+    const rows = document.querySelectorAll(".rec");
+    const last = rows[rows.length - 1];
+    last && (last.querySelector('[data-k="host"]').value ? last.querySelector('[data-k="value"]') : last.querySelector('[data-k="host"]')).focus();
+  };
+  const sug = $("#sugrec");
+  if (sug) sug.onclick = () => {
+    draft.records.push({ host: hostOf(draft.url).split(":")[0], type: "A", value: "" });
+    rerenderEdit();
+    const rows = document.querySelectorAll(".rec");
+    rows[rows.length - 1].querySelector('[data-k="value"]').focus();
+  };
+  const save = (open) => {
+    if (!validate()) { rerenderEdit(); return; }
+    const b = { ...draft, name: draft.name.trim(), url: draft.url.trim(),
+      records: draft.records.filter((r) => r.host.trim() || r.value.trim()).map((r) => ({ host: r.host.trim(), type: r.type, value: r.value.trim() })) };
+    send({ t: "saveBookmark", bookmark: b, open, back: editBack });
+  };
+  $("#save").onclick = () => save(false);
+  $("#saveopen").onclick = () => save(true);
+  for (const id of ["#f-name", "#f-url"]) {
+    $(id).onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); save(false); } };
+  }
+  $("#ed-cancel").onclick = leaveEdit;
+  if ($("#ed-back")) $("#ed-back").onclick = leaveEdit;
+  const del = $("#del");
+  if (del) del.onclick = () => {
+    if (confirmDel === draft.id) send({ t: "deleteBookmark", id: draft.id, back: editBack });
+    else { confirmDel = draft.id; rerenderEdit(); }
+  };
+  if (!draft.id) setTimeout(() => $("#f-name")?.focus(), 0);
+}
 
 /* ======================= dropdown popup ======================= */
 let kbIndex = -1;
@@ -749,6 +888,24 @@ const PANELS = {
       <div class="pp-foot trunc" title="${esc(info.configPath)}">配置文件 · ${esc(info.configPath)}</div>`;
   },
 
+  bookmarks() {
+    const bs = S.bookmarks;
+    return `
+      <div class="pn-head"><div class="pn-title">管理收藏夹</div>
+        <button class="btn primary sm" data-edit="">${I.plus}添加网站</button></div>
+      ${bs.length ? `<div class="sort-list">` + bs.map((b) => `
+        <div class="pp-row sort-row" data-sort="${esc(b.id)}">
+          <span class="grip" title="拖动调整顺序">${I.grip}</span>
+          ${avatar(b, "sm")}
+          <div class="grow"><div class="trunc">${esc(b.name)}</div><div class="pp-desc trunc">${esc(b.url)}</div></div>
+          ${b.records?.length ? `<span class="badge">${b.records.length} 条 DNS 记录</span>` : ""}
+          <button class="btn sm" data-open="${esc(b.id)}">打开</button>
+          <button class="tool" data-edit="${esc(b.id)}" title="编辑">${I.edit}</button>
+        </div>`).join("") + `</div>` : `<div class="dd-empty">还没有网站</div>`}`;
+  },
+
+  edit: editHTML,
+
   about() {
     const info = S.info;
     return `
@@ -773,7 +930,7 @@ const PANEL_BIND = {
     document.querySelectorAll("[data-open]").forEach((el) => {
       el.onclick = (e) => {
         const ed = e.target.closest("[data-edit]");
-        if (ed) send({ t: "show", page: "edit", arg: ed.dataset.edit });
+        if (ed) { editBack = ""; panel("edit", ed.dataset.edit); }
         else send({ t: "open", id: el.dataset.open });
       };
       el.oncontextmenu = (e) => {
@@ -782,8 +939,9 @@ const PANEL_BIND = {
         renderMenu();
       };
     });
-    $("#dd-add").onclick = () => send({ t: "show", page: "edit", arg: "" });
-    $("#dd-manage").onclick = () => send({ t: "show", page: "bookmarks", arg: "" });
+    $("#dd-add").onclick = () => { editBack = ""; panel("edit"); };
+    // with no site open the manager is the home page; otherwise it floats over the site
+    $("#dd-manage").onclick = () => S.current ? panel("bookmarks") : send({ t: "show", page: "bookmarks", arg: "" });
     const addr = $("#addr");
     if (addr) {
       addr.onfocus = () => addr.select();
@@ -836,16 +994,28 @@ const PANEL_BIND = {
       else { confirmDel = id; renderMenu(); }
     }));
   },
+  bookmarks() {
+    document.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => send({ t: "open", id: b.dataset.open })));
+    document.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => { editBack = "bookmarks"; panel("edit", b.dataset.edit); }));
+    if ($(".sort-list")) sortable($(".sort-list"));
+  },
+  edit: bindEdit,
   about() {},
 };
 
 function renderMenu(force) {
   document.body.classList.add("menu");
+  if (sorting) return;
   const kind = PANELS[S.menuKind] ? S.menuKind : "links";
-  if (kind !== menuKindShown) { confirmDel = null; ctxMenu = null; delConfirm = null; menuKindShown = kind; }
+  if (kind !== menuKindShown) { confirmDel = null; ctxMenu = null; delConfirm = null; draft = null; menuKindShown = kind; }
+  if (kind === "edit") {
+    if (!draft || draftFor !== S.menuArg) { startDraft(S.menuArg); draftFor = S.menuArg; confirmDel = null; }
+    // the form owns its inputs; never clobber them on background state pushes
+    else if (!force) return;
+  }
   const html = `<div class="dd dd-${kind}" id="dd">${PANELS[kind]()}</div>` + (kind === "links" && !delConfirm ? ctxMenuHTML() : "");
   // re-rendering would close an open <select>; skip pushes that change nothing
-  if (html === menuHTML) return;
+  if (html === menuHTML && !force) return;
   // background pushes (page title, loading…) must not wipe a half-typed address
   if (addrEditing && !force && document.activeElement?.id === "addr") return;
   menuHTML = html;
@@ -874,6 +1044,7 @@ function setupMenu() {
     const n = S.menuKind === "links" && !delConfirm ? S.bookmarks.length : 0;
     if (e.key === "Escape" && ctxMenu) { ctxMenu = null; renderMenu(); }
     else if (e.key === "Escape" && delConfirm) { delConfirm = null; renderMenu(); }
+    else if (e.key === "Escape" && S.menuKind === "edit") leaveEdit();
     else if (e.key === "Escape") send({ t: "menuClose" });
     else if (e.key === "ArrowDown" && n) { kbIndex = (kbIndex + 1) % n; renderMenu(); }
     else if (e.key === "ArrowUp" && n) { kbIndex = (kbIndex - 1 + n) % n; renderMenu(); }
@@ -885,7 +1056,11 @@ function setupMenu() {
 
 function render() {
   if (MODE !== "menu") { renderMain(); return; }
-  if (!S.menuOpen) { kbIndex = -1; ctxMenu = null; delConfirm = null; addrEditing = false; }
+  if (!S.menuOpen) {
+    kbIndex = -1; ctxMenu = null; delConfirm = null; addrEditing = false; draft = null; editBack = "";
+    // floating panels render afresh, and report their height, each time they open
+    if (S.menuKind === "bookmarks" || S.menuKind === "edit") { menuHTML = ""; return; }
+  }
   renderMenu();
 }
 
