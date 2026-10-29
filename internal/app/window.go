@@ -30,6 +30,7 @@ type Window struct {
 	active        bool
 	closing       bool
 	focusPending  bool
+	closedToTray  bool // hidden by closing the last window, not by the tray icon
 	grab          pointerGrab
 }
 
@@ -312,10 +313,25 @@ func (w *Window) rememberPlacement() {
 }
 
 func (w *Window) activate() {
+	if !isVisible(w.hwnd) {
+		pShowWindow.Call(w.hwnd, swShow) // hidden in the tray
+	}
 	if isIconic(w.hwnd) {
 		pShowWindow.Call(w.hwnd, swRestore)
 	}
 	pSetForegroundWindow.Call(w.hwnd)
+}
+
+// hideToTray hides the window; its site stays loaded until the tray or a link
+// shows it again.
+func (w *Window) hideToTray() {
+	if w.menu != nil {
+		w.menu.hide()
+	}
+	w.rememberPlacement()
+	w.a.save()
+	pShowWindow.Call(w.hwnd, swHide)
+	w.layout()
 }
 
 // ---------------------------------------------------------------- layout
@@ -326,9 +342,10 @@ func (w *Window) layout() {
 	if w.closing || w.ui == nil || w.ui.GetController() == nil {
 		return
 	}
-	// Keep the last valid bounds while minimized, but explicitly hide both
-	// controllers so WebView2's visibility follows the native window.
-	if isIconic(w.hwnd) {
+	// Keep the last valid bounds while minimized or hidden in the tray, but
+	// explicitly hide both controllers so WebView2's visibility follows the
+	// native window.
+	if isIconic(w.hwnd) || !isVisible(w.hwnd) {
 		w.ui.Hide()
 		if w.site != nil && w.site.GetController() != nil {
 			w.site.Hide()
@@ -588,6 +605,12 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		if w != nil {
 			w.requestFocus()
 		}
+	case wmShowWindow:
+		if w != nil && wp != 0 {
+			w.closedToTray = false
+			// sent before the window becomes visible; show the webviews after
+			w.a.post(w.layout)
+		}
 	case wmMove, wmMoving:
 		if w != nil {
 			w.notifyMoved()
@@ -612,6 +635,10 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmCopyData:
 		if w != nil && lp != 0 {
 			cd := (*copyDataStruct)(unsafe.Pointer(lp))
+			if cd.Data == 2 {
+				w.a.post(w.a.showFromTray)
+				return 1
+			}
 			if cd.Data == 1 && cd.Ptr != 0 && cd.Size >= 2 {
 				id := windows.UTF16PtrToString((*uint16)(unsafe.Pointer(cd.Ptr)))
 				w.a.post(func() { w.a.openFromExternal(id) })
@@ -640,6 +667,11 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 		return 0
 	case wmClose:
 		if w != nil {
+			if w.a.hidesOnClose() {
+				w.hideToTray()
+				w.closedToTray = true
+				return 0
+			}
 			w.a.closeWindow(w)
 		}
 		pDestroyWindow.Call(hwnd)

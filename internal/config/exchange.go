@@ -15,6 +15,7 @@ type ExportFormat struct {
 	Settings   struct {
 		DefaultPage    string `json:"defaultPage"`
 		RememberWindow bool   `json:"rememberWindow"`
+		CloseToTray    bool   `json:"closeToTray"`
 	} `json:"settings"`
 	Bookmarks []Bookmark   `json:"bookmarks"`
 	CAs       []ExportedCA `json:"cas"`
@@ -32,6 +33,7 @@ func (c *Config) Export() ([]byte, error) {
 	e := ExportFormat{App: "Intra", Version: exportVersion, ExportedAt: time.Now().Format(time.RFC3339)}
 	e.Settings.DefaultPage = c.DefaultPage
 	e.Settings.RememberWindow = c.RememberWindow
+	e.Settings.CloseToTray = c.CloseToTray
 	e.Bookmarks = append([]Bookmark{}, c.Bookmarks...)
 	for i := range e.Bookmarks {
 		e.Bookmarks[i].Window = nil

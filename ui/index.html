@@ -724,6 +724,8 @@ const PANELS = {
         </select></div>
       <div class="pp-row"><span class="grow">按链接记住窗口大小和位置</span>
         <button class="switch" role="switch" id="s-remember" aria-checked="${!!st.rememberWindow}"></button></div>
+      <div class="pp-row"><span class="grow">关闭窗口时最小化到托盘</span>
+        <button class="switch" role="switch" id="s-tray" aria-checked="${!!st.closeToTray}"></button></div>
       <div class="dd-sep"></div>
       <div class="dd-label pp-sec"><span class="grow">证书</span>
         <button class="btn sm" id="addca">${I.plus}添加 CA</button>
@@ -810,8 +812,13 @@ const PANEL_BIND = {
     }
   },
   settings() {
-    $("#s-default").onchange = (e) => send({ t: "settings", defaultPage: e.target.value, rememberWindow: !!S.settings.rememberWindow });
-    $("#s-remember").onclick = () => send({ t: "settings", defaultPage: S.settings.defaultPage, rememberWindow: !S.settings.rememberWindow });
+    const set = (p) => {
+      const st = S.settings;
+      send({ t: "settings", defaultPage: st.defaultPage, rememberWindow: !!st.rememberWindow, closeToTray: !!st.closeToTray, ...p });
+    };
+    $("#s-default").onchange = (e) => set({ defaultPage: e.target.value });
+    $("#s-remember").onclick = () => set({ rememberWindow: !S.settings.rememberWindow });
+    $("#s-tray").onclick = () => set({ closeToTray: !S.settings.closeToTray });
     $("#addca").onclick = () => $("#cafile").click();
     $("#cfg-import").onclick = () => send({ t: "importConfig" });
     $("#cfg-export").onclick = () => send({ t: "exportConfig" });

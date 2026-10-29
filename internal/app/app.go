@@ -52,6 +52,11 @@ type App struct {
 
 	saver        *saver
 	bookmarkCmds []string // system-menu command index -> bookmark id
+
+	trayHwnd  uintptr // hidden owner of the notification-area icon
+	trayIcon  uintptr
+	trayShown bool
+	quitting  bool // "quit" from the tray: closing must not hide to the tray
 }
 
 var theApp *App // window procedures need a way back to the App
@@ -145,6 +150,10 @@ func Run(version string) {
 		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
 		return
 	}
+	if err := a.createTray(); err != nil {
+		log.Printf("tray icon: %v", err)
+	}
+	defer a.removeTrayIcon()
 	start := a.startBookmark()
 	if id := parseOpenArg(os.Args[1:]); validOpenID(id) && a.cfg.Bookmark(id) != nil {
 		start = id
@@ -168,6 +177,9 @@ func Run(version string) {
 		}
 		pTranslateMessage.Call(ptr(&m))
 		pDispatchMessageW.Call(ptr(&m))
+		// WebView2's in-process message pump sometimes removes a wmAppCall it
+		// does not own without dispatching it; run whatever that left queued.
+		a.runQueue()
 	}
 }
 
@@ -176,6 +188,18 @@ func (a *App) className() string { return config.AppDirName + "-Window" }
 func activateExisting(class, openID string) {
 	h, _, _ := pFindWindowW.Call(ptr(u16(class)), 0)
 	if h == 0 {
+		return
+	}
+	// the running copy may bring a window forward itself, e.g. one hidden in the tray
+	const asfwAny = 0xFFFFFFFF
+	pAllowSetForegroundWindow.Call(asfwAny)
+	if !isVisible(h) {
+		// hidden in the tray: the running copy shows its windows itself
+		if openID != "" {
+			sendOpenRequest(h, openID)
+		} else {
+			sendShowRequest(h)
+		}
 		return
 	}
 	if isIconic(h) {
@@ -188,7 +212,7 @@ func activateExisting(class, openID string) {
 }
 
 // openFromExternal opens a bookmark requested from outside this process:
-// a taskbar jump-list click or a system-menu item.
+// a taskbar jump-list click, a system-menu item or the tray menu.
 func (a *App) openFromExternal(id string) {
 	if !validOpenID(id) || a.cfg.Bookmark(id) == nil {
 		return
@@ -196,6 +220,15 @@ func (a *App) openFromExternal(id string) {
 	from := a.foreground()
 	if from == nil || from.closing {
 		return
+	}
+	if !isVisible(from.hwnd) {
+		if from.closedToTray {
+			// the last window was closed into the tray: reuse it for the link
+			a.openHere(from, id)
+			from.activate()
+			return
+		}
+		a.showFromTray()
 	}
 	a.open(from, id)
 }
@@ -211,6 +244,12 @@ func sendOpenRequest(hwnd uintptr, id string) {
 	cd := copyDataStruct{Data: 1, Size: uint32(len(u) * 2), Ptr: uintptr(unsafe.Pointer(&u[0]))}
 	pSendMessageW.Call(hwnd, wmCopyData, 0, uintptr(unsafe.Pointer(&cd)))
 	runtime.KeepAlive(u)
+}
+
+// sendShowRequest asks the running copy to show its windows hidden in the tray.
+func sendShowRequest(hwnd uintptr) {
+	cd := copyDataStruct{Data: 2}
+	pSendMessageW.Call(hwnd, wmCopyData, 0, uintptr(unsafe.Pointer(&cd)))
 }
 
 // createMessageWindow makes the message-only window that post() targets, so
@@ -455,6 +494,7 @@ type stateMsg struct {
 	Settings  struct {
 		DefaultPage    string `json:"defaultPage"`
 		RememberWindow bool   `json:"rememberWindow"`
+		CloseToTray    bool   `json:"closeToTray"`
 	} `json:"settings"`
 	Current   *siteState `json:"current"`
 	Page      string     `json:"page"`
@@ -488,6 +528,7 @@ func (a *App) baseState() *stateMsg {
 	}
 	s.Settings.DefaultPage = a.cfg.DefaultPage
 	s.Settings.RememberWindow = a.cfg.RememberWindow
+	s.Settings.CloseToTray = a.cfg.CloseToTray
 	s.Info.Version = a.version
 	s.Info.RootCount = netx.BuiltinRootCount()
 	s.Info.BundleDate = netx.BundleDate()

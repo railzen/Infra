@@ -53,6 +53,12 @@ var (
 	pSetProcessDpiAwarenessCx = user32.NewProc("SetProcessDpiAwarenessContext")
 	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pGetWindow                = user32.NewProc("GetWindow")
+	pCreatePopupMenu          = user32.NewProc("CreatePopupMenu")
+	pAppendMenuW              = user32.NewProc("AppendMenuW")
+	pDestroyMenu              = user32.NewProc("DestroyMenu")
+	pRegisterWindowMessageW   = user32.NewProc("RegisterWindowMessageW")
+	pAllowSetForegroundWindow = user32.NewProc("AllowSetForegroundWindow")
+	pGetDpiForSystem          = user32.NewProc("GetDpiForSystem")
 	pCreateSolidBrush         = windows.NewLazySystemDLL("gdi32.dll").NewProc("CreateSolidBrush")
 	pDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
@@ -60,12 +66,14 @@ var (
 )
 
 const (
+	wmNull          = 0x0000
 	wmDestroy       = 0x0002
 	wmSize          = 0x0005
 	wmMove          = 0x0003
 	wmActivate      = 0x0006
 	wmSetFocus      = 0x0007
 	wmClose         = 0x0010
+	wmShowWindow    = 0x0018
 	wmCopyData      = 0x004A
 	wmGetMinMaxInfo = 0x0024
 	wmNCCalcSize    = 0x0083
@@ -74,6 +82,8 @@ const (
 	wmMoving        = 0x0216
 	wmDpiChanged    = 0x02E0
 	wmSettingChange = 0x001A
+	wmLButtonUp     = 0x0202
+	wmRButtonUp     = 0x0205
 	wmApp           = 0x8000
 
 	wsOverlappedWindow = 0x00CF0000
@@ -94,6 +104,7 @@ const (
 	swMinimize        = 6
 	swRestore         = 9
 	swShowNoActivate  = 4
+	swShowNA          = 8
 	swpNoZOrder       = 0x0004
 	swpNoActivate     = 0x0010
 	swpFrameChanged   = 0x0020
@@ -108,6 +119,7 @@ const (
 	smCxFrame       = 32
 	smCyFrame       = 33
 	smCxPaddedBordr = 92
+	smCxSmIcon      = 49
 
 	scMove         = 0xF010
 	scSize         = 0xF000
@@ -221,6 +233,17 @@ func dpiOf(hwnd uintptr) uint32 {
 		return 96
 	}
 	d, _, _ := pGetDpiForWindow.Call(hwnd)
+	if d == 0 {
+		return 96
+	}
+	return uint32(d)
+}
+
+func systemDPI() uint32 {
+	if pGetDpiForSystem.Find() != nil {
+		return 96
+	}
+	d, _, _ := pGetDpiForSystem.Call()
 	if d == 0 {
 		return 96
 	}
