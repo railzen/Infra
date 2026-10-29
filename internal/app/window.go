@@ -41,6 +41,9 @@ type pointerGrab struct {
 	orig   rect
 }
 
+// minimum window size in DIPs; the title bar needs about 420 wide
+const minWindowW, minWindowH = 480, 480
+
 var windowsByHwnd = map[uintptr]*Window{}
 
 func (w *Window) scale() float64 { return float64(dpiOf(w.hwnd)) / 96 }
@@ -625,7 +628,7 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 	case wmGetMinMaxInfo:
 		mi := (*minMaxInfo)(unsafe.Pointer(lp))
 		s := float64(dpiOf(hwnd)) / 96
-		mi.MinTrackSize = point{int32(720 * s), int32(480 * s)}
+		mi.MinTrackSize = point{int32(minWindowW * s), int32(minWindowH * s)}
 		return 0
 	case wmDpiChanged:
 		r := (*rect)(unsafe.Pointer(lp))
@@ -702,8 +705,8 @@ func (w *Window) trackPointer(kind, edge string, x0, y0, x, y float64) {
 		r.Top += dy
 	}
 	if kind == "resize" {
-		minW := int32(math.Round(720 * s))
-		minH := int32(math.Round(480 * s))
+		minW := int32(math.Round(minWindowW * s))
+		minH := int32(math.Round(minWindowH * s))
 		if r.W() < minW {
 			if edge == "tl" {
 				r.Left = r.Right - minW
