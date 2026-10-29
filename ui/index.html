@@ -455,6 +455,13 @@ function panel(kind, arg = "") { send({ t: "panel", kind, arg }); }
 
 const PAGE_NAMES = { home: "收藏夹", bookmarks: "管理收藏夹" };
 
+// setIcon swaps a button's icon only when it changes: state pushes arrive
+// mid-click (activation sends one), and replacing the node under a pressed
+// pointer makes Chromium drop the click.
+function setIcon(btn, svg) {
+  if (btn._icon !== svg) { btn._icon = svg; btn.innerHTML = svg; }
+}
+
 function renderBar() {
   document.body.classList.toggle("maximized", !!S.maximized);
   document.body.classList.toggle("inactive", S.active === false);
@@ -469,9 +476,9 @@ function renderBar() {
   $("#n-fwd").disabled = onPage || !c.canFwd;
   $("#n-reload").disabled = onPage;
   const loading = !onPage && c.loading;
-  $("#n-reload").innerHTML = loading ? I.stop : I.reload;
+  setIcon($("#n-reload"), loading ? I.stop : I.reload);
   $("#n-reload").title = loading ? "停止" : "刷新 (F5)";
-  $("#c-max").innerHTML = S.maximized ? I.restore : I.max;
+  setIcon($("#c-max"), S.maximized ? I.restore : I.max);
   $("#c-max").title = S.maximized ? "向下还原" : "最大化";
   let title = "";
   if (S.page && (S.page !== "home" || c)) title = esc(PAGE_NAMES[S.page] || "");
