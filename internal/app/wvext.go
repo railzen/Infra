@@ -13,28 +13,28 @@ import (
 )
 
 type wv2Vtbl struct {
-	QueryInterface, AddRef, Release                                         uintptr
-	GetSettings, GetSource, Navigate, NavigateToString                      uintptr
-	AddNavigationStarting, RemoveNavigationStarting                         uintptr
-	AddContentLoading, RemoveContentLoading                                 uintptr
-	AddSourceChanged, RemoveSourceChanged                                   uintptr
-	AddHistoryChanged, RemoveHistoryChanged                                 uintptr
-	AddNavigationCompleted, RemoveNavigationCompleted                       uintptr
-	AddFrameNavigationStarting, RemoveFrameNavigationStarting               uintptr
-	AddFrameNavigationCompleted, RemoveFrameNavigationCompleted             uintptr
-	AddScriptDialogOpening, RemoveScriptDialogOpening                       uintptr
-	AddPermissionRequested, RemovePermissionRequested                       uintptr
-	AddProcessFailed, RemoveProcessFailed                                   uintptr
+	QueryInterface, AddRef, Release                                        uintptr
+	GetSettings, GetSource, Navigate, NavigateToString                     uintptr
+	AddNavigationStarting, RemoveNavigationStarting                        uintptr
+	AddContentLoading, RemoveContentLoading                                uintptr
+	AddSourceChanged, RemoveSourceChanged                                  uintptr
+	AddHistoryChanged, RemoveHistoryChanged                                uintptr
+	AddNavigationCompleted, RemoveNavigationCompleted                      uintptr
+	AddFrameNavigationStarting, RemoveFrameNavigationStarting              uintptr
+	AddFrameNavigationCompleted, RemoveFrameNavigationCompleted            uintptr
+	AddScriptDialogOpening, RemoveScriptDialogOpening                      uintptr
+	AddPermissionRequested, RemovePermissionRequested                      uintptr
+	AddProcessFailed, RemoveProcessFailed                                  uintptr
 	AddScriptToExecuteOnDocumentCreated, RemoveScriptToExecuteOnDocCreated uintptr
-	ExecuteScript, CapturePreview, Reload                                   uintptr
-	PostWebMessageAsJSON, PostWebMessageAsString                            uintptr
-	AddWebMessageReceived, RemoveWebMessageReceived                         uintptr
-	CallDevToolsProtocolMethod, GetBrowserProcessID                         uintptr
-	GetCanGoBack, GetCanGoForward, GoBack, GoForward                        uintptr
-	GetDevToolsProtocolEventReceiver, Stop                                  uintptr
-	AddNewWindowRequested, RemoveNewWindowRequested                         uintptr
-	AddDocumentTitleChanged, RemoveDocumentTitleChanged                     uintptr
-	GetDocumentTitle                                                        uintptr
+	ExecuteScript, CapturePreview, Reload                                  uintptr
+	PostWebMessageAsJSON, PostWebMessageAsString                           uintptr
+	AddWebMessageReceived, RemoveWebMessageReceived                        uintptr
+	CallDevToolsProtocolMethod, GetBrowserProcessID                        uintptr
+	GetCanGoBack, GetCanGoForward, GoBack, GoForward                       uintptr
+	GetDevToolsProtocolEventReceiver, Stop                                 uintptr
+	AddNewWindowRequested, RemoveNewWindowRequested                        uintptr
+	AddDocumentTitleChanged, RemoveDocumentTitleChanged                    uintptr
+	GetDocumentTitle                                                       uintptr
 }
 
 // webview is a raw ICoreWebView2 pointer.
@@ -120,6 +120,38 @@ func comCall(obj uintptr, idx int, args ...uintptr) uintptr {
 	vt := *(*[32]uintptr)(unsafe.Pointer(*(*uintptr)(unsafe.Pointer(obj))))
 	r, _, _ := syscall.SyscallN(vt[idx], append([]uintptr{obj}, args...)...)
 	return r
+}
+
+// enableTitlebarDrag turns on ICoreWebView2Settings9 non-client region
+// support. CSS app-region:drag then runs the window move loop on Chromium's
+// thread, which is the thread that owns the mouse capture.
+//
+// Posting WM_NCLBUTTONDOWN from this process does not work: ReleaseCapture
+// only affects this thread, Chromium keeps the capture, and DefWindowProc's
+// modal loop never observes button-up. It then sits forever, swallowing every
+// later click on the title bar. Hover still updates, because that is painted
+// on Chromium's thread.
+func enableTitlebarDrag(c *edge.Chromium) bool {
+	s, err := c.GetSettings()
+	if err != nil || s == nil {
+		return false
+	}
+	defer s.Release()
+	// IID_ICoreWebView2Settings9
+	iid := windows.GUID{
+		Data1: 0x0528A73B, Data2: 0xE92D, Data3: 0x49F4,
+		Data4: [8]byte{0x92, 0x7A, 0xE5, 0x47, 0xDD, 0xDA, 0xA3, 0x7D},
+	}
+	var s9 uintptr
+	obj := uintptr(unsafe.Pointer(s))
+	if comCall(obj, 0, uintptr(unsafe.Pointer(&iid)), uintptr(unsafe.Pointer(&s9))) != 0 || s9 == 0 {
+		return false
+	}
+	defer comCall(s9, 2) // Release
+	// put_IsNonClientRegionSupportEnabled is vtable slot 38, past comCall's table.
+	vt := *(*[39]uintptr)(unsafe.Pointer(*(*uintptr)(unsafe.Pointer(s9))))
+	hr, _, _ := syscall.SyscallN(vt[38], s9, 1)
+	return hr == 0
 }
 
 // ICoreWebView2NewWindowRequestedEventArgs: get_Uri = 3, put_Handled = 6.

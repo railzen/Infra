@@ -25,7 +25,6 @@ var (
 	pGetClientRect            = user32.NewProc("GetClientRect")
 	pGetWindowRect            = user32.NewProc("GetWindowRect")
 	pSetWindowPos             = user32.NewProc("SetWindowPos")
-	pReleaseCapture           = user32.NewProc("ReleaseCapture")
 	pIsZoomed                 = user32.NewProc("IsZoomed")
 	pIsIconic                 = user32.NewProc("IsIconic")
 	pGetDpiForWindow          = user32.NewProc("GetDpiForWindow")
@@ -52,8 +51,6 @@ var (
 	pSetProcessDpiAwarenessCx = user32.NewProc("SetProcessDpiAwarenessContext")
 	pIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	pGetWindow                = user32.NewProc("GetWindow")
-	pGetSystemMetrics         = user32.NewProc("GetSystemMetrics")
-	pGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 	pCreateSolidBrush         = windows.NewLazySystemDLL("gdi32.dll").NewProc("CreateSolidBrush")
 	pDwmSetWindowAttribute    = dwmapi.NewProc("DwmSetWindowAttribute")
 	pGetModuleHandleW         = kernel32.NewProc("GetModuleHandleW")
@@ -70,7 +67,6 @@ const (
 	wmGetMinMaxInfo = 0x0024
 	wmNCCalcSize    = 0x0083
 	wmNCHitTest     = 0x0084
-	wmNCLButtonDown = 0x00A1
 	wmSysCommand    = 0x0112
 	wmMoving        = 0x0216
 	wmDpiChanged    = 0x02E0
@@ -103,9 +99,8 @@ const (
 	swpNoMove         = 0x0002
 	hwndTopmostInsert = ^uintptr(0) // HWND_TOPMOST (-1)
 
-	htClient  = 1
-	htCaption = 2
-	htTop     = 12
+	htClient = 1
+	htTop    = 12
 
 	smCxFrame       = 32
 	smCyFrame       = 33
@@ -245,4 +240,3 @@ func setDwmAttr(hwnd uintptr, attr uint32, val int32) {
 
 func loword(v uintptr) int32 { return int32(int16(v & 0xffff)) }
 func hiword(v uintptr) int32 { return int32(int16((v >> 16) & 0xffff)) }
-

@@ -64,7 +64,11 @@ svg { display: block; flex: none; }
 }
 .icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--secondary); }
 .icon-btn:disabled { opacity: .35; }
-.drag { flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; min-width: 40px; overflow: hidden; }
+.drag {
+  flex: 1; height: 100%; display: flex; align-items: center; justify-content: center; min-width: 40px; overflow: hidden;
+  -webkit-app-region: drag; app-region: drag;
+}
+.navs, .menus, .caption, .resize-top, button { -webkit-app-region: no-drag; app-region: no-drag; }
 .title {
   font-size: var(--text-sm); color: var(--tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 60%; display: flex; align-items: center; gap: 6px; pointer-events: none;
@@ -359,33 +363,50 @@ function barHTML() {
 function setupMain() {
   $("#root").innerHTML = barHTML();
   const bar = $("#bar");
-  // Moving/resizing hands the mouse to Windows' modal move loop. Starting it
-  // on a plain click (button already released) leaves Windows waiting for the
-  // next click, which then gets swallowed — so only start once the pointer
-  // actually moves with the button held.
-  let pressed = null; // { x, y, msg }
-  bar.addEventListener("mousedown", (e) => {
-    if (e.button !== 0 || !e.target.closest("[data-drag]")) return;
-    if (e.detail === 2) { pressed = null; send({ t: "max" }); return; }
-    pressed = { x: e.screenX, y: e.screenY, msg: { t: "drag" } };
-  });
-  document.addEventListener("mousemove", (e) => {
-    if (!pressed) return;
-    if (!(e.buttons & 1)) { pressed = null; return; }
-    if (Math.abs(e.screenX - pressed.x) > 3 || Math.abs(e.screenY - pressed.y) > 3) {
-      send(pressed.msg);
-      pressed = null;
-    }
-  });
-  document.addEventListener("mouseup", () => (pressed = null));
-  bar.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-    if (e.target.closest("[data-drag]")) send({ t: "sysmenu" });
-  });
   document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
-  $(".resize-top").addEventListener("mousedown", (e) => {
-    if (e.button === 0) pressed = { x: e.screenX, y: e.screenY, msg: { t: "resize", edge: e.target.dataset.resize } };
+  // Native app-region drag (WebView2 non-client regions) moves the window on
+  // Chromium's thread. The fallback below must not post WM_NCLBUTTONDOWN:
+  // that modal loop runs here while Chromium still holds the mouse, never
+  // sees button-up, and then swallows every later title-bar click. Hover
+  // keeps working because it is painted on the other thread.
+  if (!window.__INTRA_NATIVE_DRAG) {
+    let drag = null;
+    bar.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || !e.target.closest("[data-drag]")) return;
+      if (e.detail === 2) { drag = null; send({ t: "gestureEnd" }); send({ t: "max" }); return; }
+      drag = { x: e.screenX, y: e.screenY };
+      send({ t: "drag", x: e.screenX, y: e.screenY, x0: drag.x, y0: drag.y });
+    });
+    bar.addEventListener("contextmenu", (e) => {
+      if (e.target.closest("[data-drag]")) send({ t: "sysmenu" });
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!drag) return;
+      if (!(e.buttons & 1)) { drag = null; send({ t: "gestureEnd" }); return; }
+      send({ t: "drag", x: e.screenX, y: e.screenY, x0: drag.x, y0: drag.y });
+    });
+    document.addEventListener("mouseup", () => { if (!drag) return; drag = null; send({ t: "gestureEnd" }); });
+  }
+  const resizeTop = $(".resize-top");
+  let rz = null;
+  resizeTop.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || document.body.classList.contains("maximized")) return;
+    resizeTop.setPointerCapture(e.pointerId);
+    const edge = e.target.dataset.resize || "top";
+    rz = { x: e.screenX, y: e.screenY, edge };
+    send({ t: "resize", edge, x: e.screenX, y: e.screenY, x0: e.screenX, y0: e.screenY });
   });
+  resizeTop.addEventListener("pointermove", (e) => {
+    if (!rz) return;
+    send({ t: "resize", edge: rz.edge, x: e.screenX, y: e.screenY, x0: rz.x, y0: rz.y });
+  });
+  const endResize = () => {
+    if (!rz) return;
+    rz = null;
+    send({ t: "gestureEnd" });
+  };
+  resizeTop.addEventListener("pointerup", endResize);
+  resizeTop.addEventListener("pointercancel", endResize);
   for (const [id, kind] of [["m-fav", "links"], ["m-set", "settings"], ["m-about", "about"]]) {
     $("#" + id).addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;

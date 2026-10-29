@@ -19,8 +19,9 @@ import (
 )
 
 type inMsg struct {
-	T              string           `json:"t"`
+	T              string `json:"t"`
 	X, Y, H        float64
+	X0, Y0         float64
 	Edge           string           `json:"edge"`
 	Where          string           `json:"where"`
 	Kind           string           `json:"kind"`
@@ -58,17 +59,17 @@ func (w *Window) onMessage(fromMenu bool, raw string) {
 		w.push()
 
 	// --- window chrome ---
-	case "drag":
-		w.beginNCDrag(htCaption)
-	case "resize":
-		hit := uintptr(htTop)
-		switch m.Edge {
-		case "tl":
-			hit = 13 // HTTOPLEFT
-		case "tr":
-			hit = 14 // HTTOPRIGHT
-		}
-		w.beginNCDrag(hit)
+	case "drag", "resize":
+		// SetWindowPos / ShowWindow pump messages; leave the webview callback first.
+		kind, edge := m.T, m.Edge
+		x0, y0, x, y := m.X0, m.Y0, m.X, m.Y
+		a.post(func() {
+			if !w.closing {
+				w.trackPointer(kind, edge, x0, y0, x, y)
+			}
+		})
+	case "gestureEnd":
+		a.post(func() { w.grab.key = "" })
 	case "min", "max":
 		// ShowWindow pumps window messages; leave the WebView2 callback first.
 		a.post(func() {

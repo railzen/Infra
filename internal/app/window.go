@@ -30,6 +30,15 @@ type Window struct {
 	active        bool
 	closing       bool
 	focusPending  bool
+	grab          pointerGrab
+}
+
+// pointerGrab is the pointer gesture currently moving or resizing the window
+// without entering the Win32 modal move/size loop.
+type pointerGrab struct {
+	key    string
+	x0, y0 int32
+	orig   rect
 }
 
 var windowsByHwnd = map[uintptr]*Window{}
@@ -113,7 +122,12 @@ func (w *Window) embed() {
 	r, g, b := a.bgColor()
 	w.ui.SetBackgroundColour(r, g, b, 255)
 	lockDownUI(w.ui)
-	w.ui.Init(`window.__INTRA_MODE="main"`)
+	boot := `window.__INTRA_MODE="main"`
+	if enableTitlebarDrag(w.ui) {
+		// must be set before the document is created; the setting applies on navigation
+		boot += `;window.__INTRA_NATIVE_DRAG=1`
+	}
+	w.ui.Init(boot)
 	w.layout()
 	w.ui.NavigateToString(ui.HTML)
 
@@ -622,25 +636,68 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 
 // ---------------------------------------------------------------- window actions
 
-func cursorLParam() uintptr {
-	var pt point
-	pGetCursorPos.Call(ptr(&pt))
-	return uintptr(uint16(pt.X)) | uintptr(uint16(pt.Y))<<16
-}
-
-// beginNCDrag hands a press in the title bar to Windows' move/size loop. The
-// loop must only start while the button is still down; started after release
-// it would wait for, and swallow, the next click.
-func (w *Window) beginNCDrag(hit uintptr) {
-	vk := uintptr(0x01) // VK_LBUTTON
-	if swapped, _, _ := pGetSystemMetrics.Call(23 /*SM_SWAPBUTTON*/); swapped != 0 {
-		vk = 0x02 // VK_RBUTTON is the primary button when buttons are swapped
-	}
-	if state, _, _ := pGetAsyncKeyState.Call(vk); state&0x8000 == 0 {
+// trackPointer moves or resizes the window to follow the pointer. It uses
+// SetWindowPos instead of WM_NCLBUTTONDOWN: that message starts a modal loop
+// on this thread while the WebView still holds the mouse, so the loop never
+// sees the button go up and every later title-bar click is lost.
+func (w *Window) trackPointer(kind, edge string, x0, y0, x, y float64) {
+	if w.closing || isIconic(w.hwnd) {
 		return
 	}
-	pReleaseCapture.Call()
-	pPostMessageW.Call(w.hwnd, wmNCLButtonDown, hit, cursorLParam())
+	if kind == "resize" && isZoomed(w.hwnd) {
+		return
+	}
+	sx0, sy0 := int32(math.Round(x0)), int32(math.Round(y0))
+	key := kind
+	if kind == "resize" {
+		key += ":" + edge
+	}
+	if w.grab.key != key || w.grab.x0 != sx0 || w.grab.y0 != sy0 {
+		if w.menu != nil {
+			w.menu.hide()
+		}
+		if kind == "drag" && isZoomed(w.hwnd) {
+			pShowWindow.Call(w.hwnd, swRestore)
+		}
+		w.grab = pointerGrab{key: key, x0: sx0, y0: sy0, orig: windowRect(w.hwnd)}
+	}
+	s := w.scale()
+	dx := int32(math.Round((x - x0) * s))
+	dy := int32(math.Round((y - y0) * s))
+	if dx == 0 && dy == 0 {
+		return
+	}
+	r := w.grab.orig
+	switch {
+	case kind == "drag":
+		r.Left += dx
+		r.Right += dx
+		r.Top += dy
+		r.Bottom += dy
+	case edge == "tl":
+		r.Left += dx
+		r.Top += dy
+	case edge == "tr":
+		r.Right += dx
+		r.Top += dy
+	default:
+		r.Top += dy
+	}
+	if kind == "resize" {
+		minW := int32(math.Round(720 * s))
+		minH := int32(math.Round(480 * s))
+		if r.W() < minW {
+			if edge == "tl" {
+				r.Left = r.Right - minW
+			} else if edge == "tr" {
+				r.Right = r.Left + minW
+			}
+		}
+		if r.H() < minH {
+			r.Top = r.Bottom - minH
+		}
+	}
+	pSetWindowPos.Call(w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.W()), uintptr(r.H()), swpNoZOrder|swpNoActivate)
 }
 
 func (w *Window) toggleMaximize() {
