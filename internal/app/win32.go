@@ -44,6 +44,8 @@ var (
 	pMonitorFromPoint         = user32.NewProc("MonitorFromPoint")
 	pGetMonitorInfoW          = user32.NewProc("GetMonitorInfoW")
 	pGetSystemMenu            = user32.NewProc("GetSystemMenu")
+	pInsertMenuW              = user32.NewProc("InsertMenuW")
+	pDeleteMenu               = user32.NewProc("DeleteMenu")
 	pTrackPopupMenu           = user32.NewProc("TrackPopupMenu")
 	pEnableMenuItem           = user32.NewProc("EnableMenuItem")
 	pSetMenuDefaultItem       = user32.NewProc("SetMenuDefaultItem")
@@ -64,6 +66,7 @@ const (
 	wmActivate      = 0x0006
 	wmSetFocus      = 0x0007
 	wmClose         = 0x0010
+	wmCopyData      = 0x004A
 	wmGetMinMaxInfo = 0x0024
 	wmNCCalcSize    = 0x0083
 	wmNCHitTest     = 0x0084
@@ -106,15 +109,25 @@ const (
 	smCyFrame       = 33
 	smCxPaddedBordr = 92
 
-	scMove     = 0xF010
-	scSize     = 0xF000
-	scMinimize = 0xF020
-	scMaximize = 0xF030
-	scClose    = 0xF060
-	scRestore  = 0xF120
+	scMove         = 0xF010
+	scSize         = 0xF000
+	scMinimize     = 0xF020
+	scMaximize     = 0xF030
+	scClose        = 0xF060
+	scRestore      = 0xF120
+	scBookmarkBase = 0x1000 // custom system-menu items; spaced by 16, below SC_*
+	scBookmarkSep  = 0x0FF0
 
 	waInactive = 0
 )
+
+// copyDataStruct matches COPYDATASTRUCT. The padding between Size and Ptr is
+// inserted by Go so the pointer stays 8-byte aligned on amd64.
+type copyDataStruct struct {
+	Data uintptr
+	Size uint32
+	Ptr  uintptr
+}
 
 type point struct{ X, Y int32 }
 

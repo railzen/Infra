@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"unsafe"
@@ -49,7 +50,8 @@ type App struct {
 	qmu   sync.Mutex
 	queue []func()
 
-	saver *saver
+	saver        *saver
+	bookmarkCmds []string // system-menu command index -> bookmark id
 }
 
 var theApp *App // window procedures need a way back to the App
@@ -72,10 +74,11 @@ func Run(version string) {
 	// All copies share one config file, so only one Intra runs per user session.
 	mutex, err := windows.CreateMutex(nil, false, u16(`Local\`+config.AppDirName))
 	if err == windows.ERROR_ALREADY_EXISTS {
-		activateExisting(a.className())
+		activateExisting(a.className(), parseOpenArg(os.Args[1:]))
 		return
 	}
 	defer windows.CloseHandle(mutex)
+	setProcessAppID()
 
 	ver, err := webviewloader.GetAvailableCoreWebView2BrowserVersionString("")
 	if err != nil || ver == "" {
@@ -143,6 +146,9 @@ func Run(version string) {
 		return
 	}
 	start := a.startBookmark()
+	if id := parseOpenArg(os.Args[1:]); validOpenID(id) && a.cfg.Bookmark(id) != nil {
+		start = id
+	}
 	w, err := a.newWindow(nil, start)
 	if err != nil {
 		messageBox(0, "无法创建窗口："+err.Error(), "Intra", 0x10)
@@ -167,7 +173,7 @@ func Run(version string) {
 
 func (a *App) className() string { return config.AppDirName + "-Window" }
 
-func activateExisting(class string) {
+func activateExisting(class, openID string) {
 	h, _, _ := pFindWindowW.Call(ptr(u16(class)), 0)
 	if h == 0 {
 		return
@@ -176,6 +182,35 @@ func activateExisting(class string) {
 		pShowWindow.Call(h, swRestore)
 	}
 	pSetForegroundWindow.Call(h)
+	if openID != "" {
+		sendOpenRequest(h, openID)
+	}
+}
+
+// openFromExternal opens a bookmark requested from outside this process:
+// a taskbar jump-list click or a system-menu item.
+func (a *App) openFromExternal(id string) {
+	if !validOpenID(id) || a.cfg.Bookmark(id) == nil {
+		return
+	}
+	from := a.foreground()
+	if from == nil || from.closing {
+		return
+	}
+	a.open(from, id)
+}
+
+func sendOpenRequest(hwnd uintptr, id string) {
+	if !validOpenID(id) {
+		return
+	}
+	u, err := windows.UTF16FromString(id)
+	if err != nil || len(u) == 0 {
+		return
+	}
+	cd := copyDataStruct{Data: 1, Size: uint32(len(u) * 2), Ptr: uintptr(unsafe.Pointer(&u[0]))}
+	pSendMessageW.Call(hwnd, wmCopyData, 0, uintptr(unsafe.Pointer(&cd)))
+	runtime.KeepAlive(u)
 }
 
 // createMessageWindow makes the message-only window that post() targets, so
@@ -183,7 +218,7 @@ func activateExisting(class string) {
 func (a *App) createMessageWindow() error {
 	cls := a.className() + "-msg"
 	wc := wndClassEx{
-		WndProc:   windows.NewCallback(func(h, m, wp, lp uintptr) uintptr {
+		WndProc: windows.NewCallback(func(h, m, wp, lp uintptr) uintptr {
 			if m == wmAppCall {
 				a.runQueue()
 				return 0

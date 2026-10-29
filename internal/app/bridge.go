@@ -233,6 +233,7 @@ func (a *App) importConfig(w *Window) {
 		return
 	}
 	added, updated, cas, skipped := a.mergeImport(e)
+	a.syncLinkShortcuts()
 	for _, x := range a.windows {
 		if x.cur != nil {
 			if b := a.cfg.Bookmark(x.cur.ID); b != nil {
@@ -373,6 +374,7 @@ func (a *App) saveBookmark(w *Window, b *config.Bookmark, open bool) {
 		w.showPage("bookmarks", "")
 	}
 	a.pushAll()
+	a.syncLinkShortcuts()
 }
 
 // deleteBookmark is the delete button of the link editor.
@@ -410,6 +412,7 @@ func (a *App) removeBookmark(id string) bool {
 	}
 	a.applyRecords()
 	a.save()
+	a.syncLinkShortcuts()
 	return true
 }
 
@@ -422,6 +425,7 @@ func (a *App) moveBookmark(id string, dir int) {
 				bs[i], bs[j] = bs[j], bs[i]
 				a.save()
 				a.pushAll()
+				a.syncLinkShortcuts()
 			}
 			return
 		}

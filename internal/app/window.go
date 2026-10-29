@@ -94,6 +94,7 @@ func (a *App) newWindow(from *Window, id string) (*Window, error) {
 	}
 	w.hwnd = h
 	windowsByHwnd[h] = w
+	setWindowAppID(h)
 	a.windows = append(a.windows, w)
 	var saved *config.WindowState
 	if b := a.cfg.Bookmark(id); b != nil {
@@ -108,6 +109,7 @@ func (a *App) newWindow(from *Window, id string) (*Window, error) {
 	}
 	w.embed()
 	w.menu = newPopup(w)
+	a.syncLinkShortcuts()
 	return w, nil
 }
 
@@ -602,6 +604,22 @@ func mainWndProc(hwnd, m, wp, lp uintptr) uintptr {
 			}
 			if wp&0xffff != waInactive {
 				w.requestFocus()
+			}
+		}
+	case wmCopyData:
+		if w != nil && lp != 0 {
+			cd := (*copyDataStruct)(unsafe.Pointer(lp))
+			if cd.Data == 1 && cd.Ptr != 0 && cd.Size >= 2 {
+				id := windows.UTF16PtrToString((*uint16)(unsafe.Pointer(cd.Ptr)))
+				w.a.post(func() { w.a.openFromExternal(id) })
+				return 1
+			}
+		}
+	case wmSysCommand:
+		if w != nil {
+			if id, ok := w.a.bookmarkForCommand(wp); ok {
+				w.a.post(func() { w.a.openFromExternal(id) })
+				return 0
 			}
 		}
 	case wmGetMinMaxInfo:
